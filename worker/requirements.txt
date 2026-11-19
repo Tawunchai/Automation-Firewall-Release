@@ -5,4 +5,4 @@ redis==8.0.0
 # (it probes a device's SSH host key on a bare socket before any credential is sent), so the pin
 # that protects the device-identity check must not depend on another package's dependency tree.
 # The suite stubs paramiko (stub_modules.py), so CI would not catch a netmiko bump that moved it.
-paramiko==4.0.0
+paramiko==5.1.0
