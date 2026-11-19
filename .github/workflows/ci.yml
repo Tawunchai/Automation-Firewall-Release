@@ -49,7 +49,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
@@ -127,7 +127,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
@@ -213,7 +213,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
@@ -239,7 +239,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -276,7 +276,7 @@ jobs:
       run:
         working-directory: worker
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v5
         with:
@@ -312,7 +312,7 @@ jobs:
     name: No secrets in the tree
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The precise half, first: a named list of files that must never be tracked, checked with git
       # itself. No heuristics, no false positives, and the failure message says what to run.
@@ -395,7 +395,7 @@ jobs:
       WORKER_SHARED_SECRET: ci-not-a-real-secret
       REDIS_PASSWORD: ci-not-a-real-password
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # First, because it is near-instant and it is the cheapest possible failure. A typo in
       # docker-compose.yml — a bad indent, a volume that no longer exists, an unset required
@@ -435,7 +435,7 @@ jobs:
     name: Toolchain versions match the shipped images
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Both sides are read out of the real files. Hardcoding either one here would mean a third
       # place to keep in step, and a job that agrees with itself while both files have moved on.
@@ -506,7 +506,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
