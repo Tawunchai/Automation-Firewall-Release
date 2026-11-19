@@ -3,7 +3,7 @@
 # by the toolchain-drift job. This one mattered most of the three: the bundle that ships is built
 # HERE, so while this said 20 and CI said 24, the artifact served to users was produced by a Node
 # major that nothing in CI had ever run.
-FROM node:24-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
 
