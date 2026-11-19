@@ -13,7 +13,7 @@
 # It cost nothing measurable: CI already runs 1.26.1, this image is golang:1.26-alpine, and nothing
 # in this project builds with 1.25. Raise it again only for a reason like that one — a dependency
 # that cannot be fixed otherwise — and never as a side effect of bumping the line below.
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 # ให้ Go ดาวน์โหลด toolchain ที่ถูก version อัตโนมัติ
 ENV GOTOOLCHAIN=auto
