@@ -1,6 +1,6 @@
 # Python automation worker — dependencies
-netmiko==4.7.0
-redis==8.0.0
+netmiko==4.8.0
+redis==8.1.0
 # Declared explicitly although netmiko already pulls it in: host_keys.py imports paramiko directly
 # (it probes a device's SSH host key on a bare socket before any credential is sent), so the pin
 # that protects the device-identity check must not depend on another package's dependency tree.
