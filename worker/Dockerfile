@@ -1,7 +1,7 @@
 # Python automation worker — netmiko + redis + git
 # Pinned to the SAME minor that CI tests on (python-version in .github/workflows/ci.yml),
 # enforced by the toolchain-drift job.
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # git จำเป็นสำหรับ commit config backup
 RUN apt-get update \
