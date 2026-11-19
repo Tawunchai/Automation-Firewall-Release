@@ -1,0 +1,20 @@
+# Kept in step with backend/.dockerignore and frontend/.dockerignore, which both excluded secrets
+# while this one did not. worker/Dockerfile ends in `COPY . .`, so anything not listed here ships
+# inside the image: a .env dropped in this folder for a quick local run would be baked into it and
+# nothing would say so. (Found by SonarQube docker:S6470.)
+.env
+.env.*
+.git
+*.log
+
+# Local development leftovers.
+.venv/
+config-backups/
+__pycache__/
+*.pyc
+
+# Tests and their stubs are not part of the shipped worker. stub_modules.py in particular replaces
+# netmiko and paramiko with fakes — it is imported only by test_*.py, never by worker.py, and it
+# has no business sitting next to the code that opens real SSH sessions to a firewall.
+test_*.py
+stub_modules.py

@@ -1,0 +1,9 @@
+.venv/
+config-backups/
+__pycache__/
+*.pyc
+
+# coverage.py artefacts, written when generating a report for a Sonar scan.
+.coverage
+coverage.xml
+htmlcov/

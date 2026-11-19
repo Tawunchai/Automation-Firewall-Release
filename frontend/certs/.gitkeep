@@ -1,0 +1,7 @@
+Certificates live here. The folder is mounted read-only into the frontend container.
+
+  empty  -> nginx serves plain HTTP on 80 (fine for localhost development)
+  filled -> nginx serves HTTPS on 443 and redirects 80 to it
+
+Generate with:  ./scripts/gen-lan-cert.sh <vm-ip>
+Everything except this file is git-ignored — server.key and ca.key are private.

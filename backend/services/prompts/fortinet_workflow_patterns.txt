@@ -1,0 +1,52 @@
+EDITING / MODIFYING / RENAMING AN EXISTING OBJECT (policy, address, antivirus profile, service):
+This is mode="config", NEVER mode="query". Do NOT emit "show" or "get" to look the object up —
+the user already identified it. Emit the SAME config block you would for creating it, but keep
+the object's CURRENT name as the edit key so the app can locate it on the device:
+  - Firewall policy: edit by the policy's current name (the app maps it to the policyid). Example
+    "rename policy Allow-LAN-to-WAN to Test-Policy":
+      config firewall policy
+          edit "Allow-LAN-to-WAN"
+              set name "Test-Policy"
+          next
+      end
+  - Address / AntiVirus / Service: edit "<current-name>" and include only the set lines that change
+    (add "set name \"<new>\"" for a rename). Example "เปลี่ยน subnet ของ address LAN-Net เป็น 10.0.0.0/8":
+      config firewall address
+          edit "LAN-Net"
+              set subnet 10.0.0.0 255.0.0.0
+          next
+      end
+Rules: always keep the existing name as the edit key (never "edit 0" for an edit); only include the
+fields being changed plus any that FortiOS requires; a rename uses "set name". The app opens a review
+Wizard prefilled from the live object, overlays your changes, and the user clicks Apply to save.
+
+IPSEC SITE-TO-SITE VPN (must generate ALL 5 steps together):
+1. Phase1 config (vpn ipsec phase1-interface)
+2. Phase2 config (vpn ipsec phase2-interface)
+3. Firewall policy: LAN → VPN tunnel
+4. Firewall policy: VPN tunnel → LAN (reverse)
+5. Static route to remote subnet via tunnel interface
+CRITICAL: NEVER set nat=enable on VPN policies.
+
+SSL VPN (must generate ALL 5 steps together):
+1. vpn ssl settings (port, certificate, pool)
+2. Firewall address for IP pool (iprange type)
+3. vpn ssl web portal (full-tunnel or split)
+4. user local + user group (or LDAP group)
+5. Firewall policy: ssl.root → internal interface
+
+PORT FORWARDING (must generate BOTH steps):
+1. VIP object (extip + mappedip + portforward enable)
+2. Firewall policy: dstaddr = VIP name, nat DISABLE
+CRITICAL: Do NOT set nat=enable when using VIP as dstaddr.
+
+NEW VLAN SEGMENT (must generate ALL 4 steps):
+1. VLAN interface (type vlan, vlanid, parent interface)
+2. DHCP server on VLAN interface
+3. Address object for VLAN subnet
+4. Firewall policy for VLAN traffic
+
+HA CLUSTER:
+1. Config on primary: priority=200
+2. Config on secondary: same group-name/password, priority=100
+3. Both must have identical interface names

@@ -1,0 +1,557 @@
+# Continuous integration for this repository — the FortiGate automation console.
+#
+# Until now nothing ran the test suite automatically. Three substantial suites — Go, vitest and
+# Python — all passing, and every one of them only ran when somebody remembered to type the
+# command. The single workflow that existed covered example_web/, which is gitignored and is not
+# this project.
+#
+# Deliberately NO counts here. This comment used to carry three ("103 Go test files, 82 vitest
+# files and 78 Python tests") and by late 2026 every one was wrong — the real figures were roughly
+# double for Go, half again for vitest, and fewer for Python. A number written into a comment is
+# correct for one afternoon and then quietly lies to everyone who reads it, which is worse than no
+# number, because it is trusted. Run `/fg-preflight`; it measures them.
+#
+# Nine jobs, split by what each one answers rather than by language:
+#
+#   backend / frontend / worker   does the code still build and pass its tests
+#   coverage                      is anything LESS proved than it was (see the job: it is the only
+#                                 one with a database, so it is the only one that runs half the suite)
+#   race                          does the concurrency still hold (see the job for why it is separate)
+#   secrets                       is there a credential in the tree right now
+#   docker                        do the images that actually ship still build
+#   toolchain-drift               is CI testing the same Go / Node / Python the containers run
+#   vuln                          what do the dependency scanners say (advisory only — see the job)
+#
+# Eight of the nine are gates. `vuln` is not, yet, and the job says what has to happen first.
+#
+# ESLint is enforced as a BUDGET rather than as "zero findings" — see the frontend job, and
+# frontend/scripts/lint-budget.mjs for why. A gate demanding zero would have been red on its first
+# run and stayed red, which is the fastest way to teach a team that red means nothing.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+# A second push to the same branch makes the first run's answer irrelevant. Cancelling it frees the
+# runner instead of racing a result nobody will read.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Pinned to the version on the development machine rather than read from go.mod, which
+          # states a MINIMUM (1.25.0) and would let CI drift onto a different toolchain than the
+          # one the code is actually written and verified against.
+          go-version: "1.26.1"
+          cache-dependency-path: backend/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # `gofmt -l` prints the files it WOULD rewrite and then exits 0, which is exactly why this
+      # repository had no gofmt gate before: the obvious one-line step is green no matter what it
+      # finds. So the step reads the output itself and fails on a non-empty list.
+      #
+      # It is also why this check is authoritative here and not on the development machine. .go
+      # files are checked out with CRLF on Windows and gofmt normalises line endings to LF, so
+      # `gofmt -l .` locally names most of the tree whether or not a single space is wrong. The git
+      # index stores LF, so on a Linux runner the files it names are the ones genuinely misformatted
+      # and nothing else.
+      #
+      # Worth a hard gate because of what unformatted code costs downstream, not for its own sake:
+      # mis-sorted imports and unaligned struct fields turn every later diff into noise, and in a
+      # repository where review is the last thing standing between a change and a live firewall, a
+      # diff nobody can read is a review nobody really does.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would rewrite these files. Run: gofmt -w ."
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt is clean."
+
+      # staticcheck catches what `go vet` does not: unused unexported functions and constants, dead
+      # assignments, and the error-string conventions. It found nine of those on this codebase and
+      # they were all fixed, so this starts from zero and can be a hard gate rather than a budget.
+      #
+      # It cannot run on the Windows development machine without a detour through a container, which
+      # means in practice it runs here or nowhere — the same reasoning as the race job below. Pinned
+      # to a release rather than @latest so a new check landing upstream does not turn somebody
+      # else's unrelated pull request red.
+      - name: Staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+      - name: Test
+        run: go test ./...
+
+  coverage:
+    name: Backend coverage ratchet
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    # Half of what this repository can prove without a firewall needs Postgres: the ~137
+    # device-proxy handlers, the scheduler's two SQL sweeps, the auth package, the enqueue guards.
+    # Those tests SKIP when their DSN is unset, so the `backend` job above measures a codebase with
+    # its database half absent. This job is the one that runs them.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+          cache-dependency-path: backend/go.sum
+
+      # One database per package, and `-p 1` below so no two of them run at once.
+      #
+      # Both are needed, and each one alone is not enough. The suites TRUNCATE the tables they use,
+      # so two packages sharing a database empty each other's rows mid-test — which showed up as
+      # foreign-key violations and a Postgres deadlock, not as anything resembling the real cause.
+      # And `config` and `services` read the SAME variable (SEED_DB_TEST_DSN), so they cannot be
+      # separated by database at all; only running them one at a time keeps them apart.
+      - name: Create one database per test package
+        env:
+          PGPASSWORD: test
+        run: |
+          for db in po_test aj_test sched_test jobs_test auth_test seed_test retention_test \
+                    backupcodes_test configdeploy_test deviceaccess_test drift_test hostkey_test \
+                    hostpin_test notify_test otp_test tlspin_test totp_test user_test \
+                    passwordpolicy_test \
+                    calendar_test \
+                    changerequest_test; do
+            psql -h localhost -U postgres -c "CREATE DATABASE $db;"
+          done
+
+      - name: Test with coverage
+        env:
+          POLICYOBJECT_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=po_test sslmode=disable
+          AUTOMATIONJOB_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=aj_test sslmode=disable
+          SCHEDULER_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=sched_test sslmode=disable
+          JOBS_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=jobs_test sslmode=disable
+          AUTH_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=auth_test sslmode=disable
+          SEED_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=seed_test sslmode=disable
+          RETENTION_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=retention_test sslmode=disable
+          # ── The eleven that were missing until 2026-11-18 ──────────────────────────────────────
+          # Every one of these names a suite that EXISTS, passes, and was being skipped here, so
+          # its package's coverage floor was recorded from a run where its tests did not execute.
+          # controller/user was the worst case: the package that shipped an IDOR has an 84%
+          # handler-authorisation suite — written because of that incident — and CI never ran it,
+          # recording 7.42%. A skipped test is indistinguishable from a passing one in the log,
+          # which is the same failure shape as a gate reporting against a stale file.
+          BACKUPCODES_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=backupcodes_test sslmode=disable
+          CONFIGDEPLOY_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=configdeploy_test sslmode=disable
+          # Read by controller/devicecredential AND controller/topologydevice; `-p 1` is what keeps
+          # them from truncating each other's rows, exactly as for SEED_DB_TEST_DSN below.
+          DEVICEACCESS_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=deviceaccess_test sslmode=disable
+          DRIFT_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=drift_test sslmode=disable
+          HOSTKEY_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=hostkey_test sslmode=disable
+          HOSTPIN_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=hostpin_test sslmode=disable
+          NOTIFY_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=notify_test sslmode=disable
+          # Read by controller/totp AND services/platform.
+          OTP_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=otp_test sslmode=disable
+          TLSPIN_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=tlspin_test sslmode=disable
+          TOTP_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=totp_test sslmode=disable
+          USER_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=user_test sslmode=disable
+          # ── Added for the suites written in group 1 ───────────────────────────────────────────
+          # Each of these is a NEW suite. The variable and the database above have to arrive in the
+          # same commit as the test file: a DSN-gated suite with no variable here skips silently,
+          # and the coverage ratchet then records a floor from a run where it never executed.
+          PASSWORDPOLICY_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=passwordpolicy_test sslmode=disable
+          CALENDAR_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=calendar_test sslmode=disable
+          CHANGEREQUEST_DB_TEST_DSN: host=localhost port=5432 user=postgres password=test dbname=changerequest_test sslmode=disable
+        run: go test -p 1 ./... -coverprofile=coverage.out -covermode=set
+
+      # The gate itself. A floor rather than a target: it asks whether this change made a package
+      # LESS provable than it already was, which has an answer, instead of asking whether 40% is
+      # the right number, which does not. A package that GAINS records the gain in the same change,
+      # so nobody can undo it silently later.
+      - name: Coverage may not fall
+        env:
+          COVERAGE_PROFILE: coverage.out
+        run: go test ./test/ -run TestCoverage
+
+      - name: Coverage summary
+        if: always()
+        run: go tool cover -func=coverage.out | tail -1
+
+  race:
+    name: Backend race detector
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+          cache-dependency-path: backend/go.sum
+
+      # -race needs cgo, which is not available on the Windows development machine — so this is the
+      # ONLY place the detector ever runs, and the reason it gets a job of its own.
+      #
+      # It has plenty to look at: a FortiGate session pool shared across requests, a fleet audit
+      # fanning out over six goroutines, the SSE bus, two WebSocket endpoints, and
+      # buildLiveDeviceContext firing sixteen concurrent reads at one device. A data race in any of
+      # those produces wrong output on a live firewall, occasionally, with nothing in the logs.
+      - name: Test with race detector
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+  frontend:
+    name: Frontend (TypeScript / React)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm run test
+
+      # `npm run build` is `tsc -b && vite build`, so this covers the type check as well. Running
+      # tsc separately first would type-check the project twice for one answer.
+      - name: Type check and build
+        run: npm run build
+
+      # A ratchet, not a gate on zero. There are 385 known ESLint findings — mostly `any` and
+      # Fast-Refresh export shapes — and blocking every PR behind clearing all of them would stop
+      # the work this repository is actually for. lint-budget.json records the count per rule and
+      # this fails only when one goes UP, so new code is held to zero for every rule already there
+      # while the existing debt is paid down in whatever order suits.
+      #
+      # See scripts/lint-budget.mjs. When a change lowers a count, it lowers the budget with it:
+      #   npm run lint:budget -- --fix
+      - name: ESLint budget
+        run: npm run lint:budget
+
+  worker:
+    name: Worker (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # requirements.txt is NOT installed on purpose. The suite stubs netmiko and redis itself —
+      # it passes on a machine where neither is present, which is how it is verified locally — and
+      # installing the real packages would quietly test something other than what the developer
+      # runs. The Docker image installs them; the tests do not need them.
+      - name: Unit tests
+        run: python -m unittest discover -p 'test_*.py' -v
+
+  # The browser smoke suite is NOT a job here, and that is a decision rather than an omission.
+  #
+  # frontend/e2e loads the real console out of the running stack and asserts that no page throws —
+  # the only check that catches a bad vendor-chunk split, which tsc, vitest and `vite build` all pass
+  # straight through. To do that it needs postgres, redis, the backend, nginx AND a reachable
+  # FortiGate: most of its cases open a device page (it generates one per entry in its ROUTES
+# array, so the count moves whenever a page is added — measure it, do not trust a number here). A GitHub runner has no firewall on
+  # 10.10.20.90, so a job here would fail on infrastructure and teach everyone to ignore it, which
+  # is the same mistake as gating on 385 lint findings.
+  #
+  # It stays a deliberate local gate, run against the lab before a release:
+  #
+  #     docker compose up -d
+  #     cd frontend && npm run test:smoke
+  #
+  # Wiring it into CI properly means a runner that can reach a device — a self-hosted one on the lab
+  # network, or a FortiOS VM in the workflow. Either is real work; pretending with a green job that
+  # skips everything is not.
+
+  secrets:
+    name: No secrets in the tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The precise half, first: a named list of files that must never be tracked, checked with git
+      # itself. No heuristics, no false positives, and the failure message says what to run.
+      #
+      # .gitignore alone does not cover this. It has no effect on a file that is ALREADY tracked,
+      # which is exactly how .env stayed in the repository for months while a rule matching
+      # it sat at the top of .gitignore.
+      - name: No secret file may be tracked
+        run: |
+          set -u
+          bad=0
+          for f in .env cookies.txt fg.txt; do
+            if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::$f is tracked by git and must not be."
+              bad=1
+            fi
+          done
+          if git ls-files | grep -Ev '\.env\.example$' | grep -E '(^|/)\.env(\.|$)|\.env\.bak' ; then
+            echo "::error::the files listed above look like environment files and are tracked"
+            bad=1
+          fi
+          if [ "$bad" = "1" ]; then
+            echo ""
+            echo "Fix, from the repository root — this keeps the file on disk and only stops git"
+            echo "following it (.gitignore already covers all three):"
+            echo ""
+            echo "  git rm --cached .env cookies.txt fg.txt"
+            echo "  git commit -m 'chore: untrack secret files'"
+            echo ""
+            echo "Rotate anything those files contained as well: being untracked today does not"
+            echo "remove them from the commits that already carry them."
+            exit 1
+          fi
+          echo "No secret files are tracked."
+
+      # The general half: everything else in the checked-out tree, scanned by rule.
+      #
+      # --no-git scans the working directory rather than history, and a fresh checkout IS the
+      # tracked tree. Scanning history instead would report the .env already committed to it — true,
+      # unfixable without rewriting history, and therefore a permanently red build that says
+      # nothing about the change being tested.
+      #
+      # Test fixtures are allowlisted in .gitleaks.toml; see the trade-off recorded there.
+      # Pinned, not :latest. A scanner that silently gains rules between runs turns "CI went red and
+      # nothing changed" into a thing that happens, and the first instinct then is to disable the
+      # job. .gitleaks.toml was tuned against exactly this version.
+      - name: gitleaks
+        uses: docker://zricethezav/gitleaks:v8.30.1
+        with:
+          args: detect --source=/github/workspace --no-git --redact --config=/github/workspace/.gitleaks.toml
+
+  # `go build ./...` and `vite build` prove the code compiles on a runner. They do not prove the
+  # IMAGES build, and the images are the thing that actually drives the firewall. There are three
+  # of them, each with its own moving parts that the language jobs never touch: a multi-stage Go
+  # build on a golang base image, a multi-stage frontend that runs `npm ci` and copies the bundle
+  # into nginx, a pip install on a python base image, and a frontend entrypoint that picks an nginx
+  # config at container start. A broken one of those is a stack that cannot come up at all — see
+  # the CRLF note in frontend/Dockerfile for a failure of exactly this shape, which every
+  # language-level check passes straight through.
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    # docker-compose.yml refuses to interpolate until every `${VAR:?}` in it is set, and a runner
+    # has no .env. They are placeholders, not secrets: this job starts nothing, so no database
+    # password, JWT key, queue password or worker secret is ever used — the values only have to be
+    # non-empty for the file to parse. Nothing in the three builds reads them either; the only
+    # build arg in the file is VITE_BACKEND_URL, which has a default. If an image ever genuinely
+    # needs a secret to build, that belongs in the discussion about this job, not in a fake value
+    # here.
+    #
+    # This list must hold EVERY required variable in docker-compose.yml. REDIS_PASSWORD was added
+    # to the compose file when the job queue got a password, and was not added here, so this job
+    # failed in five seconds on every run from that commit until it was noticed. To check the list
+    # after changing the compose file:
+    #
+    #	grep -oE '\$\{[A-Z_]+:\?[^}]*\}' docker-compose.yml | sort -u
+    env:
+      POSTGRES_PASSWORD: ci-not-a-real-password
+      JWT_SECRET: ci-not-a-real-secret
+      WORKER_SHARED_SECRET: ci-not-a-real-secret
+      REDIS_PASSWORD: ci-not-a-real-password
+    steps:
+      - uses: actions/checkout@v4
+
+      # First, because it is near-instant and it is the cheapest possible failure. A typo in
+      # docker-compose.yml — a bad indent, a volume that no longer exists, an unset required
+      # variable — is caught in seconds here instead of after a five-minute image build.
+      - name: Validate the compose file
+        run: docker compose config --quiet
+
+      # Uncached, deliberately. The buildx GitHub Actions cache has to be wired per build target,
+      # as cache_from/cache_to inside each service's build block, which means editing the very file
+      # this job exists to validate in order to add keys that mean something only inside Actions.
+      # The cost of leaving it out is a cold build every run: `npm ci` plus `vite build`, a Go
+      # compile and a pip install, which makes this the slowest job in the file by several minutes.
+      # If that ever starts holding up merges, the answer is a bake file — not invented build args.
+      - name: Build images
+        run: docker compose build
+
+  # Several files pin a runtime version, and nothing until now made them agree:
+  #
+  #   .github/workflows/ci.yml   the versions the test suite runs on
+  #   backend/Dockerfile         the Go that actually ships
+  #   frontend/Dockerfile        the Node that actually builds the bundle that ships
+  #   worker/Dockerfile          the Python that actually runs the SSH jobs
+  #
+  # backend/go.mod is deliberately NOT part of the comparison: its `go` directive is a MINIMUM, for
+  # the same reason the setup-go step above does not read CI's version out of it.
+  #
+  # Why drift matters more here than in most repositories: this product opens HTTPS and SSH
+  # sessions to a live firewall and writes to its configuration. When the toolchain under the test
+  # suite is not the toolchain in the container, the difference does not surface as a failing test.
+  # It surfaces as a different TLS default, a different JSON number, a different netmiko timing —
+  # against real hardware, after a deploy, with a green CI run behind it. The tests all passed;
+  # they just passed somewhere else.
+  #
+  # Three runtimes only. Pinned action versions and npm dependencies are Dependabot's job
+  # (.github/dependabot.yml), not this one's.
+  toolchain-drift:
+    name: Toolchain versions match the shipped images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both sides are read out of the real files. Hardcoding either one here would mean a third
+      # place to keep in step, and a job that agrees with itself while both files have moved on.
+      # Compared at major.minor for Go and Python and at major for Node, because that is the
+      # precision the base image tags actually carry (`golang:1.25-alpine` floats the patch).
+      - name: Compare CI pins against the Dockerfiles
+        run: |
+          set -u
+          ci=".github/workflows/ci.yml"
+
+          ci_go=$(sed -n 's/.*go-version: *"\([0-9][0-9.]*\)".*/\1/p'     "$ci" | head -1 | cut -d. -f1,2)
+          ci_node=$(sed -n 's/.*node-version: *"\([0-9][0-9.]*\)".*/\1/p' "$ci" | head -1 | cut -d. -f1)
+          ci_py=$(sed -n 's/.*python-version: *"\([0-9][0-9.]*\)".*/\1/p' "$ci" | head -1 | cut -d. -f1,2)
+
+          img_go=$(sed -n 's/^FROM  *golang:\([0-9][0-9.]*\).*/\1/p' backend/Dockerfile  | head -1 | cut -d. -f1,2)
+          img_node=$(sed -n 's/^FROM  *node:\([0-9][0-9.]*\).*/\1/p' frontend/Dockerfile | head -1 | cut -d. -f1)
+          img_py=$(sed -n 's/^FROM  *python:\([0-9][0-9.]*\).*/\1/p' worker/Dockerfile   | head -1 | cut -d. -f1,2)
+
+          bad=0
+          compare() {
+            runtime="$1"; tested="$2"; shipped="$3"; dockerfile="$4"
+            # An empty side means the pin moved or changed shape and NOTHING was compared, which is
+            # worse than drift because it is silent. Fail on it rather than pass on it.
+            if [ -z "$tested" ] || [ -z "$shipped" ]; then
+              echo "::error::could not read the pinned $runtime version from $ci or $dockerfile — nothing was compared."
+              echo "  If a pin moved, fix the extraction in this job. Deleting the check is how the drift gets back in."
+              bad=1
+              return
+            fi
+            if [ "$tested" != "$shipped" ]; then
+              echo "::error file=$dockerfile::$runtime drift: CI tests on $tested, the shipped image runs $shipped."
+              echo "  tested  $tested  <- $ci"
+              echo "  shipped $shipped  <- $dockerfile"
+              bad=1
+              return
+            fi
+            echo "$runtime ok: $tested in $ci == $shipped in $dockerfile"
+          }
+
+          compare Go     "$ci_go"   "$img_go"   backend/Dockerfile
+          compare Node   "$ci_node" "$img_node" frontend/Dockerfile
+          compare Python "$ci_py"   "$img_py"   worker/Dockerfile
+
+          if [ "$bad" = "1" ]; then
+            echo ""
+            echo "Pick ONE version per runtime and set it in both places. Bumping only the Dockerfile"
+            echo "ships something no test ran on; bumping only this workflow tests something that"
+            echo "never ships. Either is how a firewall ends up behaving differently than CI said."
+            exit 1
+          fi
+
+  # The only job in this file that is NOT a gate, and that is a starting position rather than a
+  # policy. Three scanners report against dependency trees nobody has triaged yet, so the first run
+  # is expected to find things — and a job that is red from its first run teaches everyone to read
+  # "CI failed" as "CI again", which costs more than the findings are worth.
+  #
+  # To make it blocking: run it once, and give every finding one of two answers — a dependency bump,
+  # or a written reason it does not reach this code (a dev-only tool, an unreachable code path).
+  # Then delete the `continue-on-error` lines below. Left non-blocking forever it is decoration.
+  #
+  # continue-on-error appears twice below, on the job and on each scanner step, and both are load
+  # bearing. The job-level one is what keeps the job out of the way of a merge. The step-level ones
+  # are what make all three scanners actually run: a failed step ends the job's remaining steps, so
+  # with only the job-level flag the first scanner with a finding would quietly hide the other two
+  # and the triage this job exists to enable would be working from a third of the picture.
+  vuln:
+    name: Dependency vulnerabilities (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.1"
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      # govulncheck reports only the advisories whose vulnerable SYMBOL this code actually calls,
+      # which is the difference between a list worth triaging and a list of everything in go.sum.
+      # Pinned to a release for the same reason staticcheck is: a scanner that silently gains rules
+      # between runs turns "CI went red and nothing changed" into a thing that happens here, and the
+      # first instinct then is to switch the job off.
+      - name: govulncheck (Go)
+        continue-on-error: true
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      # No `npm ci` first on purpose: npm audit resolves the tree from package-lock.json, so this
+      # needs no install and audits the versions that are actually pinned. --audit-level=high keeps
+      # the moderate findings — most of them in the dev-only toolchain — from burying the ones that
+      # reach the shipped bundle.
+      - name: npm audit (frontend)
+        continue-on-error: true
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+      # -r requirements.txt, NOT an install. The worker job above explains why requirements are
+      # never installed in CI: the test suite stubs netmiko and redis itself, and installing the
+      # real packages would quietly test something other than what the developer runs. pip-audit
+      # reads the pinned list as a file and never puts it in the environment, so both things stay
+      # true at once.
+      - name: pip-audit (worker)
+        continue-on-error: true
+        working-directory: worker
+        run: |
+          python -m pip install --quiet pip-audit
+          pip-audit -r requirements.txt

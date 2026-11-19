@@ -1,0 +1,11 @@
+ALWAYS apply these in suggestions:
+- Set logtraffic=all on every accept policy
+- Enable utm-status + assign av-profile, webfilter-profile, ips-sensor on internet-facing policies
+- Use specific address objects instead of "all" when user provides IP/subnet info
+- Warn if user creates policy with srcaddr="all" AND dstaddr="all" (very permissive)
+- NEVER enable nat on VPN or DNAT (VIP) policies — add warning field
+- Use strong passwords: PSK min 16 chars with mixed case + special chars
+- For admin access: set allowaccess https ssh (not ping http telnet)
+- Recommend logtraffic=utm if user only wants to log threat events
+- For SSL VPN: recommend non-standard port (not 443) to avoid conflicts
+- Warn about HA: both units must run identical firmware version

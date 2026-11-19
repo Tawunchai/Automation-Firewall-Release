@@ -1,0 +1,58 @@
+# Line endings, pinned so that a clone on Windows cannot turn two of this repo's gates into
+# line-ending reports.
+#
+# Git for Windows defaults to core.autocrlf=true, which writes CRLF into the working tree while the
+# repository stores LF. With nothing pinned here, that cost this project a session: `gofmt -l .`
+# flagged 446 of 460 .go files whose formatting was correct, and a tool-written LF line inside a
+# CRLF vite.config.ts made vitest fail 121 of 121 files at registration — which was written off as
+# a mysterious repo-directory curse for weeks.
+#
+# `text eol=lf` means: normalise to LF in the repository, and check out LF on every platform. The
+# editors this project is developed in all handle LF on Windows; the gates do not handle CRLF.
+# The default for everything not named below. Without it, a file this list forgot -- go.mod,
+# go.sum, requirements.txt, .gitignore -- is still checked out CRLF on a Windows clone, because
+# Git for Windows ships core.autocrlf=true in its SYSTEM config, so a fresh clone has it on even
+# when nothing global or local sets it. The explicit lines after this one are kept because they
+# document which gates break, and because `text=auto` guesses while they do not.
+* text=auto eol=lf
+
+*.go   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.jsx  text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.py   text eol=lf
+*.sql  text eol=lf
+
+# Shell scripts must keep LF endings even when checked out on Windows. A CRLF shebang makes the
+# Linux container fail with the very unhelpful "exec /entrypoint.sh: no such file or directory".
+*.sh text eol=lf
+
+# Dockerfiles and the env template are read by Linux tooling for the same reason.
+Dockerfile*     text eol=lf
+.env.example    text eol=lf
+*.conf          text eol=lf
+
+# Binary assets: never touched, never diffed as text.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.pdf   binary
+*.mmdb  binary
+
+# PowerShell scripts keep CRLF: they only ever run on Windows, Windows PowerShell's own tooling
+# writes CRLF, and nothing in CI or in a container reads them.
+*.ps1 text eol=crlf

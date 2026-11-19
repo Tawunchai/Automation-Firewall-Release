@@ -1,0 +1,41 @@
+# Logs
+#
+# `/logs`, ANCHORED. Vite's starter template ships this line as a bare `logs`, and a gitignore
+# pattern with no slash in it matches a file or directory of that name at ANY depth — so it also
+# swallowed `src/pages/logs/`, the whole Log & Report page. Nothing warned: the files never showed
+# up as untracked (ignored files are not listed), `git status` reported a clean tree, and a machine
+# that pulled the repo simply never received the directory while every other change arrived.
+#
+# The leading slash pins it to the project root, which is the only place a log directory would
+# actually be written.
+/logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+# Anchored for the same reason as /logs above: `dist` unanchored would hide any source directory
+# that happened to be called dist. Vite only ever writes the one at the root. node_modules stays
+# unanchored on purpose — nested ones are real and all of them should be ignored.
+/dist
+/dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Playwright browser smoke tests (npm run test:smoke)
+test-results/
+playwright-report/
+e2e/.auth/

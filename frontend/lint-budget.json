@@ -1,0 +1,6 @@
+{
+  "jsx-a11y/no-autofocus": 3,
+  "react-hooks/exhaustive-deps": 6,
+  "react-hooks/immutability": 2,
+  "react-hooks/set-state-in-effect": 6
+}

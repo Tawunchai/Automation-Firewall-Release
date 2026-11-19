@@ -1,0 +1,24 @@
+{
+  // docker-compose.yml uses Compose's "required variable" form, ${VAR:?message}, for every secret
+  // (JWT_SECRET, POSTGRES_PASSWORD, WORKER_SHARED_SECRET). That is deliberate: it makes the stack
+  // refuse to start rather than fall back to the publicly-known placeholder values it used to ship
+  // with. Some builds of the Docker extension do not recognise that form and flag one problem per
+  // line, so the schema validator is disabled for compose files only.
+  //
+  // The file is verified the real way instead:  docker compose config --quiet
+  "yaml.schemas": {},
+  "docker.composeLanguageService.diagnostics.enabled": false,
+  "yaml.validate": false,
+  "files.associations": {
+    "docker-compose.yml": "dockercompose"
+  },
+
+  // Tailwind IntelliSense's "suggestCanonicalClasses" lint rewrites explicit arbitrary utilities
+  // (rounded-[4px], max-w-[340px], break-words, …) to v4's canonical spellings. This codebase uses
+  // the explicit 4px geometry on purpose — it is the Dastone clone's house style, in ~145 files —
+  // so the suggestion is noise, not a defect: `rounded-[4px]` and `rounded-sm` compile to the same
+  // 4px here. Turned off for this workspace only (it defaults to "warning") so the Problems panel
+  // reflects real issues. The build enforces correctness the real way: `npm run build` + lint:budget.
+  "tailwindCSS.lint.suggestCanonicalClasses": "ignore",
+  "python.terminal.useEnvFile": true
+}

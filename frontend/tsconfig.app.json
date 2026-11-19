@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* The app's JSX compiles against src/i18n, not react/jsx-runtime, so that every literal in
+       every page is translated on its way to the DOM without a call site. Must stay in step with
+       `react({ jsxImportSource })` in vite.config.ts - tsc type-checks against whatever this names,
+       vite compiles against whatever that names, and a mismatch type-checks one runtime while
+       shipping another. See src/i18n/jsx-runtime.ts. */
+    "jsxImportSource": "i18n-jsx",
+    /* No `baseUrl` beside this: it is deprecated in TypeScript 5.9 and goes away in 7.0. Since 4.1
+       a relative `paths` entry is resolved against the directory holding this file, which is what
+       the leading "./" means here — so the mapping needs nothing else to anchor it. */
+    "paths": { "i18n-jsx/*": ["./src/i18n/*"] },
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["src"],
+  /* The *.test.ts(x) files beside the source are type-checked by tsconfig.test.json instead: they
+     run in Node and import node:fs, which must not resolve in the browser bundle's project. */
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

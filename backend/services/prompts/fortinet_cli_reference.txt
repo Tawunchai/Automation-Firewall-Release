@@ -1,0 +1,1342 @@
+### 1. FIREWALL POLICY (IPv4)
+Required: name, srcintf, dstintf, srcaddr, dstaddr, service, action, schedule
+config firewall policy
+    edit 0
+        set name "Allow-LAN-Internet"
+        set srcintf "<LAN-IFACE>"          ← REPLACE with a real interface name from LIVE DEVICE CONTEXT
+        set dstintf "<WAN-IFACE>"          ← likewise — never copy a name out of these examples
+        set srcaddr "LAN-Net"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+        set nat enable
+        set logtraffic all
+    next
+end
+UTM PROFILES ARE NOT IN THIS EXAMPLE ON PURPOSE. This block used to carry «set av-profile "default"»
+and four more like it, which contradicts RULE 7 two screens below: do not name a profile you have
+not seen on the device. Add utm-status and the profile lines ONLY when the user asked for
+inspection AND the profile name came from LIVE DEVICE CONTEXT or from a profile you are creating in
+the same proposal.
+INTERFACE NAMES IN THIS REFERENCE ARE PLACEHOLDERS. Every «<…-IFACE>» above is a slot, not a
+name: FortiGate models differ (some have wan1/wan2/dmz/lan, others port1…portN, and any of them can
+be renamed), so the only correct source is the INTERFACES list in LIVE DEVICE CONTEXT. Use the
+interface's NAME, never its alias. If the context did not load, say which interface you assumed and
+why, rather than emitting one as though it were known.
+ONE INTERFACE PER SIDE. FortiOS accepts several, but this console's policy form and its Apply path
+carry exactly one srcintf and one dstintf — so «set srcintf "a" "b"» would show two interfaces in
+the chat and create a policy with one. If the user needs several, either propose one policy per
+interface, or use a ZONE (config system zone), which is a single name covering many interfaces and
+is what FortiOS provides for this.
+
+### 2. ADDRESS OBJECTS
+Subnet:
+config firewall address
+    edit "LAN-192.168.1.0"
+        set type ipmask
+        set subnet 192.168.1.0 255.255.255.0
+        set comment "LAN Network"
+    next
+end
+Single IP: set subnet 192.168.1.100 255.255.255.255
+IP Range:
+config firewall address
+    edit "DHCP-Range"
+        set type iprange
+        set start-ip 192.168.1.100
+        set end-ip 192.168.1.200
+    next
+end
+FQDN:
+config firewall address
+    edit "example.com"
+        set type fqdn
+        set fqdn "example.com"
+    next
+end
+Wildcard FQDN (a "*" wildcard is still type fqdn — there is NO wildcard-fqdn type):
+config firewall address
+    edit "wildcard.google.com"
+        set type fqdn
+        set fqdn "*.google.com"
+    next
+end
+Geography (country is an ISO 3166-1 alpha-2 code):
+config firewall address
+    edit "Thailand"
+        set type geography
+        set country TH
+    next
+end
+Device (MAC Address):
+config firewall address
+    edit "Printer-MAC"
+        set type mac
+        set macaddr "00:11:22:33:44:55"
+    next
+end
+Static route configuration for a subnet/FQDN (allow-routing):
+config firewall address
+    edit "Routable-Net"
+        set type ipmask
+        set subnet 10.20.0.0 255.255.0.0
+        set allow-routing enable
+    next
+end
+Address Group:
+config firewall addrgrp
+    edit "All-Internal"
+        set member "LAN-192.168.1.0" "DMZ-192.168.2.0"
+    next
+end
+
+### 3. SERVICE OBJECTS
+config firewall service custom
+    edit "App-TCP-8080"
+        set protocol TCP/UDP/SCTP
+        set tcp-portrange 8080
+    next
+end
+Multiple ports: set tcp-portrange 80 443 8080 8443
+UDP: set udp-portrange 5060
+Service Group:
+config firewall service group
+    edit "Web-Services"
+        set member "HTTP" "HTTPS" "App-TCP-8080"
+    next
+end
+
+### 3b. SCHEDULES (firewall schedule — controls WHEN a policy is active)
+A policy's "set schedule" references one of these. "always" (24/7) is built in — reuse it unless the
+user asks for a time window. The CLI keyword is "firewall schedule" (two words). Three tables:
+RECURRING (repeats weekly — the common case, e.g. "office hours", "block gaming after 22:00"):
+config firewall schedule recurring
+    edit "Work-Hours"
+        set day monday tuesday wednesday thursday friday
+        set start 08:00
+        set end 18:00
+    next
+end
+NOTE: start/end are 24-hour "hh:mm". "All day" for the chosen days = OMIT start/end.
+      day is space-separated: sunday monday tuesday wednesday thursday friday saturday.
+ONE TIME (a single date/time window — e.g. a maintenance window, an event):
+config firewall schedule onetime
+    edit "Maintenance-Window"
+        set start 22:00 2026/08/01
+        set end 02:00 2026/08/02
+    next
+end
+NOTE: onetime start/end are "hh:mm yyyy/mm/dd".
+SCHEDULE GROUP (combine several schedules):
+config firewall schedule group
+    edit "All-Restricted-Times"
+        set member "Work-Hours" "Weekend"
+    next
+end
+WHEN TO CREATE ONE: only when the user asks for a time restriction ("เฉพาะเวลาทำงาน", "หลัง 5 โมง",
+"block ... ตอนกลางคืน", "only on weekdays", a specific date). Otherwise the policy uses "always".
+When you DO create a schedule, emit its config block FIRST, then reference it with
+set schedule "<name>" in the policy — same order as address/service prerequisites.
+
+### 4. NAT — IP POOL (Source NAT overload)
+config firewall ippool
+    edit "WAN-IP-Pool"
+        set type overload
+        set startip 203.0.113.5
+        set endip 203.0.113.5
+    next
+end
+Use in policy: set ippool enable / set poolname "WAN-IP-Pool"
+
+### 5. NAT — VIRTUAL IP (DNAT / Port Forward)
+The ONE correct VIP example is in section 11 (Web-Server-VIP) — it is verified against the device
+and matches what this app's own VIP builder sends. Two fields decide whether a port-forward works
+at all, and both used to be wrong here:
+- the external interface field is "set extintf", NOT "set interface". "any" is valid and is what
+  the GUI's "any" box means.
+- a port-forward MUST carry "set protocol tcp" (or udp). Without it extport/mappedport are
+  ignored and the VIP forwards every protocol to the mapped host — more exposure than was asked
+  for, and silently.
+Full 1:1 NAT: omit protocol/extport/mappedport/portforward entirely.
+VIP Group:
+config firewall vipgrp
+    edit "VIP-WebServers"
+        set interface "<WAN-IFACE>"
+        set member "VIP-Web-80" "VIP-Web-443"
+    next
+end
+(vipgrp really does use "set interface" — it is firewall vip, above, that uses extintf.)
+POLICY for VIP: set dstaddr "VIP-Web-80", set nat disable (NOT nat enable for DNAT)
+
+### 6. INTERFACES
+Physical:
+config system interface
+    edit "wan1"
+        set mode static
+        set ip 203.0.113.1 255.255.255.0
+        set allowaccess ping
+        set role wan
+        set description "WAN Primary"
+    next
+end
+VLAN:
+config system interface
+    edit "lan.10"
+        set type vlan
+        set vlanid 10
+        set interface "<LAN-IFACE>"
+        set ip 192.168.10.1 255.255.255.0
+        set allowaccess ping https ssh
+        set alias "VLAN10-Users"
+    next
+end
+Loopback:
+config system interface
+    edit "loopback0"
+        set type loopback
+        set ip 10.255.0.1 255.255.255.255
+        set allowaccess ping
+    next
+end
+
+### 7. DHCP SERVER / RELAY
+DHCP Server:
+config system dhcp server
+    edit 0
+        set interface "<LAN-IFACE>"
+        set default-gateway 192.168.1.1
+        set netmask 255.255.255.0
+        set dns-server1 8.8.8.8
+        set dns-server2 1.1.1.1
+        set lease-time 86400
+        config ip-range
+            edit 1
+                set start-ip 192.168.1.100
+                set end-ip 192.168.1.200
+            next
+        end
+    next
+end
+DHCP Relay (on interface):
+config system interface
+    edit "lan"
+        set dhcp-relay-service enable
+        set dhcp-relay-ip 10.0.0.1
+    next
+end
+
+### 8. ROUTING
+Static route (default GW):
+config router static
+    edit 0
+        set dst 0.0.0.0 0.0.0.0
+        set gateway 203.0.113.254
+        set device "wan1"
+        set distance 10
+        set priority 0
+    next
+end
+Policy Route:
+config router policy
+    edit 0
+        set input-device "lan"
+        set src 192.168.1.0/24
+        set dst 0.0.0.0/0
+        set gateway 203.0.113.1
+        set output-device "wan1"
+    next
+end
+BGP:
+config router bgp
+    set as 65001
+    set router-id 10.255.0.1
+    config neighbor
+        edit "203.0.113.254"
+            set remote-as 65002
+            set activate enable
+            set soft-reconfiguration enable
+        next
+    end
+    config network
+        edit 1
+            set prefix 192.168.1.0/24
+        next
+    end
+end
+OSPF:
+config router ospf
+    set router-id 10.255.0.1
+    config area
+        edit 0.0.0.0
+        next
+    end
+    config network
+        edit 1
+            set prefix 192.168.1.0/24
+            set area 0.0.0.0
+        next
+    end
+end
+
+### 9. IPSEC VPN — SITE-TO-SITE (IKEv2)
+Phase 1:
+config vpn ipsec phase1-interface
+    edit "VPN-to-Branch"
+        set interface "<WAN-IFACE>"
+        set ike-version 2
+        set authmethod psk
+        set peertype any
+        set net-device disable
+        set proposal aes256-sha256
+        set dpd on-idle
+        set dpd-retryinterval 60
+        set remote-gw 203.0.113.50
+        set psksecret "EXAMPLE-ONLY-DO-NOT-EMIT-THIS-STRING"   ← GENERATE a fresh 32+ char random PSK for THIS tunnel; never copy the literal above
+    next
+end
+Phase 2:
+config vpn ipsec phase2-interface
+    edit "VPN-to-Branch-P2"
+        set phase1name "VPN-to-Branch"
+        set proposal aes256-sha256
+        set pfs enable
+        set dhgrp 14
+        set auto-negotiate enable
+        set src-subnet 192.168.1.0 255.255.255.0
+        set dst-subnet 10.0.0.0 255.255.255.0
+    next
+end
+VPN Firewall Policy (LAN → Branch):
+config firewall policy
+    edit 0
+        set name "VPN-LAN-to-Branch"
+        set srcintf "<LAN-IFACE>"
+        set dstintf "VPN-to-Branch"
+        set srcaddr "LAN-192.168.1.0"
+        set dstaddr "Branch-10.0.0.0"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+        set logtraffic all
+    next
+end
+VPN Firewall Policy (Branch → LAN):
+config firewall policy
+    edit 0
+        set name "VPN-Branch-to-LAN"
+        set srcintf "VPN-to-Branch"
+        set dstintf "<LAN-IFACE>"
+        set srcaddr "Branch-10.0.0.0"
+        set dstaddr "LAN-192.168.1.0"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+        set logtraffic all
+    next
+end
+Static route for VPN:
+config router static
+    edit 0
+        set dst 10.0.0.0 255.255.255.0
+        set device "VPN-to-Branch"
+    next
+end
+IMPORTANT: NEVER set nat=enable on VPN firewall policies.
+
+### 9b. IPSEC VPN — HUB-AND-SPOKE (ADVPN + BGP auto-discovery)
+Use this when the user asks for a "hub and spoke", "ADVPN", "dynamic mesh" or a BGP-routed VPN with
+one central FortiGate and many branches. It is a DIFFERENT shape from Site-to-Site: an overlay tunnel
+with a real tunnel-interface IP, routed by BGP (never static routes), and the HUB accepts many spokes
+on ONE dialup phase1. Verified live on FortiOS 7.2.10. Emit the role the user asked for (default Hub).
+The overlay is a small dedicated subnet (e.g. 10.10.1.0/24): the hub is .1, each spoke a later host.
+
+HUB — phase1 is a dialup LISTENER (type dynamic + auto-discovery-sender):
+config vpn ipsec phase1-interface
+    edit "HubVPN"
+        set type dynamic
+        set interface "<WAN-IFACE>"
+        set ike-version 2
+        set peertype any
+        set net-device disable
+        set proposal aes256-sha256
+        set add-route disable
+        set dpd on-idle
+        set auto-discovery-sender enable
+        set psksecret "EXAMPLE-ONLY-DO-NOT-EMIT-THIS-STRING"   ← GENERATE a fresh 32+ char random PSK for THIS tunnel; never copy the literal above
+    next
+end
+config vpn ipsec phase2-interface
+    edit "HubVPN"
+        set phase1name "HubVPN"
+        set proposal aes256-sha256
+    next
+end
+The tunnel-interface overlay IPs (hub = .1, remote-ip mask sizes the whole overlay):
+config system interface
+    edit "HubVPN"
+        set ip 10.10.1.1 255.255.255.255
+        set remote-ip 10.10.1.2 255.255.255.0
+        set allowaccess ping
+    next
+end
+Local network(s) the hub advertises (address + group, referenced by the spoke2hub policy):
+config firewall address
+    edit "HubVPN_local"
+        set subnet 10.0.96.0 255.255.252.0
+    next
+end
+BGP — local AS shared by every end, router-id = the hub tunnel IP, one network per local subnet, and
+a neighbor per spoke tunnel IP (Individual) OR a neighbor-group+neighbor-range over the overlay (Range):
+config router bgp
+    set as 65400
+    set router-id 10.10.1.1
+    config neighbor
+        edit "10.10.1.3"
+            set remote-as 65400
+        next
+    end
+    config network
+        edit 1
+            set prefix 10.0.96.0 255.255.252.0
+        next
+    end
+end
+Firewall policies — spoke→hub (overlay in, LAN out) and spoke→spoke (overlay hair-pinned through the hub):
+config firewall policy
+    edit 0
+        set name "vpn_HubVPN_spoke2hub"
+        set srcintf "HubVPN"
+        set dstintf "<LAN-IFACE>"
+        set srcaddr "all"
+        set dstaddr "HubVPN_local"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+    edit 0
+        set name "vpn_HubVPN_spoke2spoke"
+        set srcintf "HubVPN"
+        set dstintf "HubVPN"
+        set srcaddr "all"
+        set dstaddr "all"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+end
+SPOKE differs: phase1 is type STATIC with the hub's PUBLIC IP as remote-gw + auto-discovery-receiver
+enable + net-device enable (not sender); phase2 adds auto-negotiate enable; the tunnel interface's
+ip is this spoke's tunnel IP and remote-ip points at the HUB tunnel IP; BGP has ONE neighbor = the hub
+tunnel IP; policies mirror the LAN↔overlay pair for this spoke's own local subnet.
+RULES: BGP is ONE process per device (one AS) — every hub/spoke in the same VPN shares the SAME AS.
+Range mode replaces the individual "config neighbor" with:
+    config neighbor-group
+        edit "HubVPN"
+            set interface "HubVPN"
+            set remote-as 65400
+        next
+    end
+    config neighbor-range
+        edit 1
+            set prefix 10.10.1.0 255.255.255.0
+            set neighbor-group "HubVPN"
+        next
+    end
+IMPORTANT: never NAT a hub-spoke policy; the object names above (<name>_local, vpn_<name>_spoke2hub,
+vpn_<name>_spoke2spoke) are what this platform's VPN wizard uses — keep them so the two agree.
+
+### 9c. IPSEC VPN — REMOTE ACCESS / DIALUP (FortiClient or Cisco IPsec client)
+Use this when the user asks for a "remote access VPN", "dialup VPN", "FortiClient VPN", "client VPN"
+or "road-warrior" — remote USERS (laptops/phones) connecting IN with a software client, not a
+site-to-site tunnel. It is a DIALUP LISTENER (type dynamic) with IKE mode-config: the FortiGate hands
+each client an IP from a pool and checks it against a USER GROUP. Verified live on FortiOS 7.2.10.
+Pick the client from the request: FortiClient (default) or Cisco. Emit phase1 + phase2 + the client
+pool address + (if split tunnel) the split group + the remote-to-local policy. Reuse an existing user
+group from EXISTING USER GROUPS in LIVE DEVICE CONTEXT (never invent one).
+config vpn ipsec phase1-interface
+    edit "RA-FortiClient"
+        set type dynamic
+        set interface "<WAN-IFACE>"
+        set ike-version 1
+        set peertype any
+        set net-device disable
+        set mode-cfg enable
+        set proposal aes128-sha256 aes256-sha256
+        set wizard-type dialup-forticlient
+        set xauthtype auto
+        set authusrgrp "Guest-group"
+        set ipv4-start-ip 10.10.80.1
+        set ipv4-end-ip 10.10.80.254
+        set ipv4-netmask 255.255.255.0
+        set dns-mode auto
+        set ipv4-split-include "RA-FortiClient_split"
+        set save-password enable
+        set psksecret "EXAMPLE-ONLY-DO-NOT-EMIT-THIS-STRING"   ← GENERATE a fresh 32+ char random PSK for THIS tunnel; never copy the literal above
+    next
+end
+config vpn ipsec phase2-interface
+    edit "RA-FortiClient"
+        set phase1name "RA-FortiClient"
+        set proposal aes128-sha256 aes256-sha256
+    next
+end
+The split-tunnel group = the LAN networks reachable over the VPN (reuse existing address objects):
+config firewall addrgrp
+    edit "RA-FortiClient_split"
+        set member "LAN-192.168.1.0"
+    next
+end
+The client IP pool as an address object (its name is <tunnel>_range):
+config firewall address
+    edit "RA-FortiClient_range"
+        set type iprange
+        set start-ip 10.10.80.1
+        set end-ip 10.10.80.254
+    next
+end
+Remote-to-local policy (clients → LAN); srcintf is the tunnel, dstintf the LAN interface:
+config firewall policy
+    edit 0
+        set name "vpn_RA-FortiClient_remote"
+        set srcintf "RA-FortiClient"
+        set dstintf "<LAN-IFACE>"
+        set srcaddr "RA-FortiClient_range"
+        set dstaddr "LAN-192.168.1.0"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+    next
+end
+RULES: Cisco client differs — set wizard-type dialup-cisco, and if the user wants a group name to be
+required, set mode aggressive + peertype one + peerid "<group>". Keep set ipv4-split-include only when
+split tunnelling; a full-tunnel client omits it (and its policy dstaddr is "all"). The object names
+(<name>_range, <name>_split, vpn_<name>_remote) are what this platform's VPN wizard uses — keep them.
+NEVER NAT a remote-access policy.
+
+### 10. SSL VPN
+SSL VPN Settings:
+config vpn ssl settings
+    set servercert "Fortinet_Factory"
+    set tunnel-ip-pools "SSLVPN-IP-Pool"
+    set dns-server1 192.168.1.1
+    set port 10443
+    set status enable
+end
+SSL VPN IP Pool (address object):
+config firewall address
+    edit "SSLVPN-IP-Pool"
+        set type iprange
+        set start-ip 10.212.134.200
+        set end-ip 10.212.134.210
+    next
+end
+SSL VPN Portal:
+config vpn ssl web portal
+    edit "full-tunnel"
+        set tunnel-mode enable
+        set web-mode disable
+        set ip-pools "SSLVPN-IP-Pool"
+        set split-tunneling disable
+    next
+end
+SSL VPN User:
+config user local
+    edit "vpnuser1"
+        set type password
+        set passwd "EXAMPLE-ONLY-DO-NOT-EMIT-THIS-STRING"   ← GENERATE a unique password; never copy the literal above
+    next
+end
+SSL VPN User Group:
+config user group
+    edit "SSL-VPN-Users"
+        set member "vpnuser1"
+        config match
+            edit 1
+                set server-name "SSL-VPN-Users"
+                set group-name "SSL-VPN-Users"
+            next
+        end
+    next
+end
+SSL VPN Firewall Policy:
+config firewall policy
+    edit 0
+        set name "SSL-VPN-to-LAN"
+        set srcintf "ssl.root"
+        set dstintf "<LAN-IFACE>"
+        set srcaddr "SSLVPN-IP-Pool"
+        set dstaddr "LAN-192.168.1.0"
+        set action accept
+        set schedule "always"
+        set service "ALL"
+        set logtraffic all
+    next
+end
+
+### 11. SECURITY PROFILES
+AntiVirus (FortiOS 7.2, flow-based — every setting is PER-PROTOCOL):
+Per protocol (http/ftp/cifs/smtp/pop3/imap) the fields are:
+  set av-scan block            → inspect this protocol ("block" = scan+block, the GUI default; "monitor" = log only; "disable" = off)
+  set fortisandbox block       → "Send files to FortiSandbox for inspection"
+  set outbreak-prevention block → "Use FortiGuard outbreak prevention database"
+  set external-blocklist block → "Use external malware block list"
+  set quarantine enable        → "Quarantine"
+  set executables virus        → "Treat Windows executables in email attachments as viruses" (smtp/pop3/imap ONLY)
+Top-level (NOT per-protocol):
+  set mobile-malware-db enable → "Include mobile malware protection"
+  set ems-threat-feed enable   → "Use EMS threat feed"
+Example — scan HTTP+FTP+SMTP and block, with FortiGuard outbreak prevention on:
+config antivirus profile
+    edit "AV-Standard"
+        set comment "Standard AV profile"
+        set feature-set flow
+        config http
+            set av-scan block
+            set outbreak-prevention block
+        end
+        config ftp
+            set av-scan block
+            set outbreak-prevention block
+        end
+        config smtp
+            set av-scan block
+            set outbreak-prevention block
+            set executables virus
+        end
+        set mobile-malware-db enable
+    next
+end
+RULES:
+- To turn a protocol ON, its sub-block MUST contain "set av-scan block" (do NOT use the old "set options scan").
+- fortisandbox / outbreak-prevention / external-blocklist / quarantine only take effect on a protocol whose av-scan is block/monitor.
+- Only add a protocol sub-block for protocols the user wants inspected; omit the rest.
+- Use "edit \"<profile-name>\"" (a quoted name), NOT "edit 0", for antivirus profiles.
+Web Filter — TWO ways to block; PICK THE RIGHT ONE:
+(A) STATIC URL FILTER = the RELIABLE, LICENSE-FREE way to block SPECIFIC websites/apps BY NAME
+(YouTube, Facebook, TikTok, X/Twitter, Netflix, …). It works EVEN WITHOUT a FortiGuard license.
+**When the user names specific sites/apps to block, ALWAYS use this — NOT category filter.** Emit a
+webfilter urlfilter table then link it from the profile by its table id:
+config webfilter urlfilter
+    edit 3
+        set name "Staff-Web-urls"
+        config entries
+            edit 1
+                set url "youtube.com"
+                set type simple
+                set action block
+            next
+            edit 2
+                set url "*.youtube.com"
+                set type wildcard
+                set action block
+            next
+            edit 3
+                set url "youtu.be"
+                set type simple
+                set action block
+            next
+            edit 4
+                set url "*.youtu.be"
+                set type wildcard
+                set action block
+            next
+            edit 5
+                set url "googlevideo.com"
+                set type simple
+                set action block
+            next
+            edit 6
+                set url "*.googlevideo.com"
+                set type wildcard
+                set action block
+            next
+        end
+    next
+end
+config webfilter profile
+    edit "Staff-Web"
+        set comment "Block YouTube"
+        config web
+            set urlfilter-table 3
+        end
+    next
+end
+(the table id 3 above is an EXAMPLE — take the next FREE id from LIVE DEVICE CONTEXT)
+RULES for Static URL Filter — THE ENTRY TYPE DECIDES WHAT MATCHES. Get this wrong and nothing is blocked:
+- "set type simple" matches the host EXACTLY (and its paths). "youtube.com" simple blocks youtube.com/... but
+  NOT www.youtube.com or m.youtube.com.
+- "set type wildcard" matches a PATTERN and the pattern MUST CONTAIN "*". "*.youtube.com" blocks every
+  SUBdomain (www./m./api.youtube.com) but NOT the bare youtube.com. A wildcard entry with no "*" in it is a
+  plain exact match — i.e. a broken duplicate of simple. NEVER write "set type wildcard" with a bare domain.
+- "set type regex" is a regular expression — only use it when the user explicitly asks for one.
+⇒ TO BLOCK A WHOLE SITE, EMIT TWO ENTRIES PER DOMAIN:
+      edit 1
+          set url "youtube.com"            ← the apex
+          set type simple
+          set action block
+      next
+      edit 2
+          set url "*.youtube.com"          ← every subdomain
+          set type wildcard
+          set action block
+      next
+- COMPLETE COVERAGE IS YOUR JOB: block EVERY domain the app serves from — its CDN and media hosts included —
+  and give each of them BOTH entries (simple apex + wildcard subdomains). Do not ask the user to list them.
+  Known sets:
+  · YouTube  → youtube.com, youtu.be, googlevideo.com, ytimg.com, youtubei.googleapis.com, yt3.ggpht.com
+  · Facebook → facebook.com, fb.com, fbcdn.net, facebook.net, fbsbx.com, messenger.com
+  · Instagram→ instagram.com, cdninstagram.com
+  · TikTok   → tiktok.com, tiktokcdn.com, tiktokv.com, byteoversea.com
+  · Netflix  → netflix.com, nflxvideo.net, nflximg.net, nflxext.com
+  · X/Twitter→ twitter.com, x.com, twimg.com, t.co
+- TABLE IDS ARE MKEYS: "edit <id>" in "config webfilter urlfilter" OVERWRITES the table with that id. Take the
+  next FREE id from "FILTER TABLE IDS ALREADY IN USE" in LIVE DEVICE CONTEXT — never reuse a live one.
+- The profile's "set urlfilter-table <id>" MUST equal the urlfilter table's edit id.
+- HTTPS: the Static URL Filter matches on the SNI, so certificate-inspection is enough for a domain block;
+  say in the explanation that deep-inspection is needed only for full-URL/path matching.
+(B) FORTIGUARD CATEGORY FILTER = broad category blocking (e.g. block ALL Social Media / Streaming).
+⚠️ Requires an ACTIVE FortiGuard web-filtering license. If LIVE DEVICE CONTEXT shows the device is
+NOT licensed, category filtering does NOTHING — you MUST use Static URL Filter (A) instead. Only use
+categories when the user asks to block a whole CATEGORY and the device is licensed:
+config webfilter profile
+    edit "..."
+        config ftgd-wf
+            config filters
+                edit 1
+                    set category 37
+                    set action block
+                next
+            end
+        end
+    next
+end
+⚠️ TWO SILENT FAILURES ON THIS PATH — both answer 200 and then do nothing:
+- «set action authenticate» REQUIRES «set auth-usr-grp "<group>"» in the SAME filter entry. Without
+  it FortiOS answers error -149 and DISCARDS THE WHOLE ftgd-wf FILTER LIST — every category you
+  just set, not only the authenticate one. Use block or monitor unless the user named a user group
+  that exists on the device.
+- A FLOW-BASED FortiGate accepts most of an ssl-ssh-profile and keeps almost none of it. If LIVE
+  DEVICE CONTEXT says the inspection mode is flow, say so in the explanation and do not propose
+  deep-inspection settings as though they will take effect; proxy-based features belong to a
+  proxy-mode device.
+IPS Sensor:
+config ips sensor
+    edit "IPS-Standard"
+        config entries
+            edit 1
+                set severity high critical
+                set action block
+                set status enable
+            next
+        end
+    next
+end
+RULES for an IPS sensor (checked against this app's own IPS client):
+- An entry is EITHER a filter OR a signature list, and the difference is whether "set rule" is
+  present. A FILTER entry (the example above) selects signatures by attribute — severity,
+  protocol, os, application, cve — and every attribute you omit means "all". That is how you say
+  "all signatures of this severity": by omitting the others, NOT by naming a value.
+- "set rule" takes NUMERIC signature ids and nothing else: «set rule 12345 67890». There is no
+  "set rule all" — rule is a member table on the device, so "all" would be read as a signature
+  named all, and the entry then matches nothing at all while reporting success.
+- Do not invent signature ids. If the user names a specific signature and you do not have its id
+  from the device, write the filter form instead and say which attribute you used.
+Application Control (application list = "Application Sensor") — FULL capability, use ALL of it:
+An application list is an ORDERED list of "entries". FortiOS evaluates them TOP-DOWN, so put the
+narrow overrides FIRST and the broad category grid LAST. There are three kinds of entry:
+(a) APPLICATION OVERRIDE — target named apps by their EXACT numeric signature ids (from the
+    APPLICATION SIGNATURES block of LIVE DEVICE CONTEXT). This is how you block Facebook/YouTube/
+    TikTok/… precisely without blocking their whole category. NEVER invent an id.
+(b) FILTER OVERRIDE — target apps by attribute: category + risk + popularity + technology +
+    behavior + protocols + vendor. Any attribute you omit means "all".
+(c) CATEGORY GRID — one entry per action, listing the category ids that get that action.
+Action encoding (exactly these pairs):
+    block     → set action block            (log enable is implied)
+    monitor   → set action pass  + set log enable
+    allow     → set action pass  + set log disable
+    quarantine→ set action block + set quarantine attacker + set quarantine-expiry 5m
+Numeric codes (FortiOS stores codes, not the GUI words):
+    technology: 0=Network-Protocol 1=Browser-Based 2=Client-Server 4=Peer-to-Peer
+    behavior:   2=Botnet 3=Evasive 5=Excessive-Bandwidth 6=Tunneling
+    risk/popularity: 1..5
+Full example — block Facebook + YouTube by signature, quarantine high-risk P2P, monitor the rest:
+config application list
+    edit "AppCtrl-Staff"
+        set comment "Block Facebook and YouTube"
+        config entries
+            edit 1
+                set application 15832 17735 15722 31077 16420 33104
+                set action block
+            next
+            edit 2
+                set category 2
+                set risk 4 5
+                set technology 4
+                set behavior 5
+                set action block
+                set quarantine attacker
+                set quarantine-expiry 5m
+            next
+            edit 3
+                set category 6
+                set action block
+            next
+            edit 4
+                set category 3 5 7 8 12 15 17 21 22 23 25 26 28 29 30 31
+                set action pass
+                set log enable
+            next
+        end
+        set unknown-application-action pass
+        set unknown-application-log enable
+        set enforce-default-app-port disable
+        set app-replacemsg enable
+        set options allow-dns
+        set control-default-network-services enable
+        config default-network-services
+            edit 1
+                set port 53
+                set services dns
+                set violation-action block
+            next
+        end
+    next
+end
+RULES for Application Control:
+- "set application <ids>" takes SPACE-SEPARATED numeric ids and NOTHING else — no names, no quotes.
+- Cover the whole app family (all Facebook* / all YouTube* ids in the context) or the block leaks.
+- The category grid entry MUST list every category id the device has (see APPLICATION CATEGORIES in
+  LIVE DEVICE CONTEXT) so no category is left unset.
+- Use "edit \"<name>\"" (a quoted name), NOT "edit 0", for the application list itself.
+Virtual IP (VIP) — DESTINATION NAT / port forwarding: expose an internal server to the outside by
+mapping a public/external IP:port to a private IP:port. Use it for "port forward", "publish/expose
+a server", "map <public-ip> to <internal-ip>", "DNAT", "let the Internet reach my web server".
+A VIP is NOT a security profile — it is a firewall OBJECT that a policy references in its
+DESTINATION (set dstaddr "<vip-name>"). The classic inbound-server pattern is:
+config firewall vip
+    edit "Web-Server-VIP"
+        set extintf "port1"
+        set extip 203.0.113.10
+        set mappedip "192.168.1.100"
+        set portforward enable
+        set protocol tcp
+        set extport 8080
+        set mappedport 80
+    next
+end
+config firewall policy
+    edit 0
+        set name "Inbound-Web"
+        set srcintf "port1"
+        set dstintf "<LAN-IFACE>"
+        set srcaddr "all"
+        set dstaddr "Web-Server-VIP"
+        set action accept
+        set schedule "always"
+        set service "HTTP"
+        set nat disable
+    next
+end
+RULES for Virtual IP — every one verified live (FortiGate 7.2.10):
+- The policy that USES the VIP puts the VIP NAME in "set dstaddr", srcintf = the WAN/outside
+  interface, dstintf = the inside interface. This is INBOUND (Internet → server), the reverse of a
+  normal outbound policy.
+- ⚠️ "set nat" on that policy stays DISABLE. The VIP already does the destination NAT; turning on
+  source NAT as well makes replies come from the firewall and is almost never what you want inbound.
+- "set extip" is the external/public IP (or a range "a-b"). "set mappedip" is the internal server
+  IP, written as a quoted string — the app stores it as the device's [{range}] table.
+- Port forward a single service ⇒ set portforward enable + protocol + extport (outside) + mappedport
+  (inside). Whole-IP 1:1 NAT (no port change) ⇒ omit portforward (or set it disable) and every port
+  is forwarded.
+- ⚠️ FQDN VIPs are a DIFFERENT shape (type fqdn, set extaddr/mapped-addr to FQDN ADDRESS names, NO
+  extip). Only emit type fqdn when the user explicitly maps between FQDN names; the normal
+  publish-a-server case is the static-nat block above.
+- The VIP is keyed by name: use "edit \"<vip-name>\"", NOT "edit 0". The policy uses "edit 0".
+- Two VIPs cannot share the same extip on the same interface (the device answers -34). Reuse an
+  existing VIP from LIVE DEVICE CONTEXT when its external IP+port already match; don't make a twin.
+
+DNS Filter — blocks a domain at DNS-lookup time, BEFORE any connection is made. With the STATIC
+DOMAIN FILTER it needs NO licence, so it is the DNS-layer equivalent of Web Filter's Static URL
+Filter. Use it when the user asks for DNS-level blocking ("block at DNS", "dnsfilter", "stop the
+domain resolving"). Attach with "set dnsfilter-profile".
+config dnsfilter domain-filter
+    edit <FREE-TABLE-ID>              ← a NUMBER you take from "FILTER TABLE IDS ALREADY IN USE"
+        set name "DNS-Block-Social"
+        config entries
+            edit 1
+                set domain "*.facebook.com"
+                set type wildcard
+                set action block
+                set status enable
+            next
+            edit 2
+                set domain "facebook.com"
+                set type simple
+                set action block
+                set status enable
+            next
+        end
+    next
+end
+config dnsfilter profile
+    edit "DNS-Block-Social"
+        set comment "Block social media at DNS"
+        config domain-filter
+            set domain-filter-table <FREE-TABLE-ID>   ← the SAME number as the edit above
+        end
+        set log-all-domain enable
+    next
+end
+THERE IS NO "config ftgd-dns" BLOCK IN THAT EXAMPLE, ON PURPOSE: FortiGuard DNS categories need the
+web-filtering licence, so on an unlicensed device a category rule blocks NOTHING while reading in
+the chat as though the site were blocked. Add ftgd-dns ONLY when LIVE DEVICE CONTEXT shows the
+licence AND the user asked for category filtering. The static domain filter needs no licence.
+THE TABLE ID IS THE TABLE'S KEY, AND IT APPEARS TWICE. «edit <id>» and «set domain-filter-table
+<id>» must be the SAME number, and NOT one listed in "FILTER TABLE IDS ALREADY IN USE" (that
+section names the next free id). Both mistakes fail silently: «edit 0» makes FortiOS pick the id
+itself (never 0) so the profile points at a table that does not exist, and an id already in use
+OVERWRITES that live table, name, rows and all.
+RULES for DNS Filter — every one of these is enforced BY THE DEVICE (verified live):
+- ⚠️ CATEGORY ACTION IS "block" OR "monitor" — NEVER "allow". FortiOS accepts "set action allow"
+  with NO error and then STORES "block", i.e. it blocks exactly what you meant to allow. To ALLOW a
+  category, OMIT its edit entry entirely. A category with no entry is allowed.
+  "set action block" = the GUI's "Redirect to Block Portal". An entry with NO action line is monitor.
+- Blocking a NAMED SITE ⇒ the STATIC DOMAIN FILTER (config dnsfilter domain-filter + set
+  domain-filter-table), NOT FortiGuard categories: categories need the FortiGuard web-filtering
+  licence, which this device does NOT have (check LIVE DEVICE CONTEXT), so a category rule blocks
+  NOTHING here. Cover every domain the site uses (facebook.com + *.facebook.com + fbcdn.net …) or
+  the block leaks — same rule as Web Filter's URL filter.
+- Domain entry "set type" is simple | wildcard | regex. simple = EXACT host ("facebook.com" does NOT
+  match www.facebook.com); wildcard is a pattern and only means something WITH a "*". So emit BOTH
+  "*.facebook.com" (wildcard) and "facebook.com" (simple) to cover the apex and its subdomains.
+- Domain entry "set action" is block | allow | monitor (this one really does take "allow" — it is a
+  different table from the category filter above).
+- "set domain-filter-table" — see the table-id rule above the example. Do NOT use "edit 0" for this
+  table (unlike a policy or an address, where edit 0 is correct): it is keyed by a number you
+  choose. Applied object by object the app re-resolves the table by NAME, so a free id is right on
+  both paths; over the raw-CLI path it is the only thing that works at all.
+- The profile itself is keyed by name: use "edit \"<profile-name>\"", NOT "edit 0".
+- "set options" in config ftgd-dns is a FLAG LIST: "ftgd-disable" turns the whole category filter OFF,
+  "error-allow" = the GUI's "Allow DNS requests when a rating error occurs". Omit the line for neither.
+- "set redirect-portal" 0.0.0.0 IS the GUI's "Use FortiGuard Default" — omit the line unless the user
+  names a real portal IP.
+- "set safe-search enable" enforces Safe Search on Google/Bing/YouTube; only then does
+  "set youtube-restrict strict|moderate" apply (there is NO "none" value).
+- DNS Filter vs Web Filter vs Application Control — pick on the user's words, and say why in the
+  explanation: DNS filter stops the NAME resolving (cheap, catches every protocol, but a hard-coded
+  IP or DoH bypasses it); Web Filter's Static URL Filter inspects HTTP/HTTPS URLs; Application
+  Control matches app signatures. "Defence in depth" = emit more than one and attach them all.
+File Filter — block/log files BY TYPE (true file-type detection, not by extension). Needs NO licence.
+Use it when the user wants to stop file KINDS moving over the network ("block exe downloads",
+"stop staff emailing zip files", "log PDFs leaving"). Attach with "set file-filter-profile".
+config file-filter profile
+    edit "FF-Block-Exec"
+        set comment "Block executables"
+        set feature-set flow
+        set scan-archive-contents enable
+        config rules
+            edit "block-exe"
+                set comment "no executables inbound"
+                set protocol http ftp
+                set action block
+                set direction incoming
+                set password-protected any
+                set file-type exe bat elf msi
+            next
+        end
+    next
+end
+RULES for File Filter — every one of these is enforced BY THE DEVICE (verified live):
+- "set action" is log-only | block. There is NO "monitor" keyword: the GUI's Monitor IS log-only.
+- "set file-type" is REQUIRED on every rule (≥1) — a rule without it fails with "-61 file-type must be set".
+  Values come from FILE FILTER TYPES in LIVE DEVICE CONTEXT; anything else is "-3 entry not found in
+  datasource". NEVER invent a file type.
+- "set direction" is incoming | outgoing | any, and it ONLY APPLIES TO http/ftp/ssh/cifs. On a rule whose
+  protocols are only mail (smtp/imap/pop3/mapi) the device SILENTLY forces direction to "any" — so for a
+  mail-only rule just omit direction (or set any) and say so rather than promising a direction.
+- "set password-protected yes" matches ONLY password-protected files, and then file-type is restricted to
+  the formats that can carry a password: 7z msoffice msofficex pdf rar zip. Any other type with
+  password-protected yes is rejected ("-3"). Default is "any" — omit it unless the user asks for
+  password-protected files specifically.
+- "set protocol" is a SPACE-SEPARATED flag list from: http ftp smtp imap pop3 mapi cifs ssh. Flow mode
+  offers http ftp smtp imap pop3 cifs. Omitting it defaults to "http ftp smtp imap pop3 cifs".
+- Use "edit \"<profile-name>\"" (a quoted name), NOT "edit 0". Rules are keyed by name too: edit "<rule>".
+- scan-archive-contents enable = look INSIDE archives (the GUI's "Scan archive contents", default on).
+
+### 12. HIGH AVAILABILITY (HA)
+config system ha
+    set group-name "FW-Cluster"
+    set mode a-p
+    set password "EXAMPLE-ONLY-DO-NOT-EMIT-THIS-STRING"   ← GENERATE a unique password; never copy the literal above
+    set priority 200
+    set hbdev "port3" 50
+    set session-sync-dev "port3"
+    set override enable
+    config ha-mgmt-interfaces
+        edit 1
+            set interface "mgmt"
+            set gateway 192.168.200.1
+        next
+    end
+end
+NOTE: Secondary unit set priority 100. Same group-name and password required.
+
+### 13. SD-WAN  (FULL-STACK — the chat shows an "SD-WAN Wizard" button and Apply builds it over REST)
+"config system sdwan" is a COMPLEX object: ONE block whose four child tables are four separate CMDB
+tables. Emit them in THIS order, because that is the order they depend on each other and the order
+the wizard creates them in:  zone -> members -> health-check -> service.
+
+config system sdwan
+    config zone
+        edit "SDWAN_Internet"                  <- Zone name. Groups the WAN links.
+        next
+    end
+    config members
+        edit 1                                 <- see SEQUENCE NUMBERS below
+            set interface "<WAN-IFACE>"               <- interface NAME from INTERFACES, never an alias
+            set zone "SDWAN_Internet"          <- MUST be a zone this block creates or the device has
+            set gateway 203.0.113.254          <- next hop; omit only on DHCP/PPPoE links
+            set cost 0                         <- lower wins on a tie
+            set priority 1
+            set status enable
+        next
+        edit 2
+            set interface "<WAN2-IFACE>"
+            set zone "SDWAN_Internet"
+            set gateway 203.0.114.254
+            set cost 10
+            set priority 10
+            set status enable
+        next
+    end
+    config health-check
+        edit "HC_Internet"                     <- NO HYPHENS in this name (see below)
+            set detect-mode active             <- active | passive | prefer-passive
+            set protocol ping                  <- ping | http | dns  (only these three)
+            set server "1.1.1.1" "8.8.8.8"     <- AT MOST TWO, and each must be unique per SLA
+            set interval 500                   <- ms
+            set failtime 5
+            set recoverytime 5
+            set update-static-route enable
+            set members 1 2                    <- the member seq-nums above; omit = all members
+            config sla
+                edit 1
+                    set link-cost-factor latency jitter packet-loss
+                    set latency-threshold 250
+                    set jitter-threshold 50
+                    set packetloss-threshold 5
+                next
+            end
+        next
+    end
+    config service                             <- the GUI calls these "SD-WAN Rules"
+        edit 1
+            set name "Steer_Internet"
+            set mode sla                       <- manual | priority | sla | load-balance
+            set src "LAN_Subnet"               <- an address object; "all" is allowed
+            set dst "all"
+            set priority-members 1 2           <- the member seq-nums above (or set priority-zone "<zone>")
+            config sla
+                edit "HC_Internet"             <- the health-check NAME is the key here
+                    set id 1                   <- ...and the SLA number is a field. (Opposite of the
+                next                              health-check's own sla table, whose key IS the number.)
+            end
+        next
+    end
+end
+
+SEQUENCE NUMBERS — the one thing that goes silently wrong. A member's key is a number the FIREWALL
+assigns; the numbers you write in "edit 1" / "set members 1 2" / "set priority-members 1 2" are just
+handles inside YOUR proposal. The app maps them to the real ones after it creates the members, so
+ALWAYS number your members from 1 upward in one block, and ALWAYS refer to those same numbers from
+the health-check and the service. Never refer to a member number you did not define in this block.
+
+WHICH MODE, and what each one then REQUIRES (the device silently discards fields belonging to
+another mode, exactly like a firewall policy's UTM fields):
+  manual        just priority-members / priority-zone. Use when the user says "always prefer wan1".
+  priority      "Best quality" -> ALSO needs  set health-check "<HC name>"  and  set link-cost-factor
+                latency|jitter|packet-loss.
+  sla           "Lowest cost (SLA)" -> ALSO needs the "config sla" sub-table. Use this for
+                "use whichever link meets the SLA". THE MOST COMMON ANSWER.
+  load-balance  "Maximize bandwidth" -> ALSO needs the "config sla" sub-table + set hash-mode.
+
+RULES YOU MUST FOLLOW (each one is a real device refusal, verified on the lab FortiGate):
+  a. HEALTH-CHECK NAMES CANNOT CONTAIN A HYPHEN. "HC-Internet" is refused with
+     «char(-) is reserved ... Return code -651». Use an underscore: "HC_Internet". (This is why the
+     device's own checks are named Default_AWS, not Default-AWS.) Also refused: < > ' " # ( ).
+  b. TWO HEALTH CHECKS MAY NOT PROBE THE SAME SERVER. A second one gets
+     «Server 1.1.1.1 is duplicated in the X and Y ... -7» and the whole write is discarded. Check
+     EXISTING PERFORMANCE SLAs in LIVE DEVICE CONTEXT and pick a server none of them uses.
+  c. A health check needs a server (except detect-mode passive, or protocol dns + system-dns enable),
+     and "set server" takes AT MOST TWO values.
+  d. A member's zone must exist. If the device has no SD-WAN zone yet, CREATE one in the same block.
+  e. NEVER emit "set status enable" on the parent expecting it to be applied. Turning SD-WAN on
+     re-homes every route leaving through a member interface, so the app deliberately does NOT write
+     it. If SD-WAN is off (LIVE DEVICE CONTEXT says so), still emit the objects, and say in the
+     explanation that the user must enable SD-WAN from Network > SD-WAN afterwards.
+  f. AN INTERFACE A FIREWALL POLICY STILL NAMES CANNOT BECOME A MEMBER. FortiGate answers -3
+     («entry not found in datasource»). LIVE DEVICE CONTEXT lists which interfaces those are — pick
+     members from the ones NOT listed, or say which policies must be repointed at the SD-WAN zone
+     first. This is the most common reason an otherwise perfect SD-WAN proposal cannot be applied.
+  g. REUSE FIRST, as everywhere else: if EXISTING SD-WAN ZONES / MEMBERS / PERFORMANCE SLAs already
+     has what the user asked for, reference it instead of re-creating it — a duplicate name is
+     error -5, and an interface can only be an SD-WAN member once.
+
+### 14. AUTHENTICATION SERVERS — LDAP / RADIUS
+These are FULL-STACK in this app: the chat shows an "LDAP Server Wizard" / "RADIUS Server Wizard"
+button, and Apply creates them over REST. So emit real, complete blocks — they get applied verbatim.
+REUSE FIRST: check EXISTING LDAP SERVERS / EXISTING RADIUS SERVERS in LIVE DEVICE CONTEXT. If one
+already points at the same host, say so and reference it — a duplicate NAME is error -5. To CHANGE
+one, emit edit "<that existing name>" (the wizard then opens in EDIT mode).
+
+LDAP — config user ldap. The GUI fields map like this (nothing else is in the dialog):
+config user ldap
+    edit "AD-Corp"
+        set server "192.168.1.10"          ← Server IP/Name  (REQUIRED)
+        set port 389                       ← Server Port     (389 plain/STARTTLS, 636 LDAPS)
+        set cnid "sAMAccountName"          ← Common Name Identifier (default "cn"; AD uses sAMAccountName)
+        set dn "DC=company,DC=com"         ← Distinguished Name (the search base)
+        set type regular                   ← Bind Type: simple | anonymous | regular
+        set username "CN=svc-forti,OU=Service,DC=company,DC=com"
+        (set password: OMITTED on purpose — emit this line ONLY when the user typed the real bind
+         password; see the rule below. A value here would be applied verbatim and the bind would fail.)
+    next
+end
+RULES for an LDAP server (all verified on the device):
+- BIND TYPE decides the credentials. type regular is the only one that takes username+password —
+  emit BOTH, and never for simple/anonymous (FortiOS ignores them there). Active Directory needs
+  regular with a real service account; use simple only when the user says so.
+- ⚠️ "set password" is the bind account's EXISTING password on the AD server — you cannot know it.
+  Emit the line ONLY when the user typed the real value. Otherwise OMIT it entirely and say the
+  password must be entered in the LDAP Wizard before Apply. Never emit a placeholder of any kind
+  (<UNKNOWN>, <password>, changeme, xxx …) — the app strips them and the field comes back empty.
+- SECURE CONNECTION is ONE field: "set secure starttls" or "set secure ldaps". Omit it entirely for
+  a plain connection — there is no separate toggle. With ldaps ALSO set port 636.
+- CERTIFICATE VERIFICATION is «set ca-cert "<name>"» and it is a DATASOURCE: the name MUST come from CA
+  CERTIFICATES in LIVE DEVICE CONTEXT. An invented name fails the whole block with -3. When you are
+  not sure, OMIT ca-cert — a secure connection without cert verification still works.
+  "set server-identity-check enable" only means anything alongside a ca-cert.
+- EXCHANGE SERVER is "set obtain-user-info enable" + "set user-info-exchange-server <name>", and
+  that name is a DATASOURCE too (EXCHANGE CONNECTORS in LIVE DEVICE CONTEXT). If the context says
+  none exist, DO NOT emit either line — say the connector has to be created first (the LDAP wizard
+  has a "+ Create" button for it).
+- Use edit "<name>" (a quoted name), never edit 0.
+- The name is 35 chars max; server 63; cnid 20; dn 511.
+
+RADIUS — config user radius. The GUI dialog is Name / Authentication method / NAS IP / Include in
+every user group / Primary Server / Secondary Server, and NOTHING else:
+config user radius
+    edit "NPS-Corp"
+        set server "192.168.1.11"          ← Primary Server IP/Name (REQUIRED)
+        (set secret: REQUIRED, but OMITTED here on purpose — it is the secret already configured on
+         the RADIUS server. Emit it ONLY when the user typed the real value; see the rule below.)
+        set secondary-server "192.168.1.12"   ← Secondary Server (optional)
+        (set secondary-secret: same rule as set secret above.)
+        set auth-type pap                  ← Authentication method (omit ⇒ Default)
+        set nas-ip 192.168.1.1             ← NAS IP (optional)
+        set all-usergroup enable           ← Include in every user group (optional)
+    next
+end
+RULES for a RADIUS server (all verified on the device):
+- ⚠️ "set secret" is the shared secret ALREADY configured on the RADIUS server — you cannot know
+  it. Emit it ONLY when the user typed the real value; otherwise omit it (and secondary-secret) and
+  say it must be entered in the RADIUS Wizard before Apply. Never emit a placeholder.
+- AUTHENTICATION METHOD: omit auth-type for the GUI's "Default" (the device negotiates). To pin it,
+  use pap | chap | ms_chap | ms_chap_v2 — exactly those spellings ("mschapv2" is invalid). MS-CHAP-v2
+  is what Windows NPS normally wants.
+- A SECONDARY SERVER needs BOTH secondary-server AND secondary-secret to work. When the user gave
+  no secret, still emit secondary-server and say both secrets go in the Wizard — never emit a
+  secondary-secret with no secondary-server.
+- ⚠️ THE ADDRESSES MUST BE DIFFERENT. secondary-server equal to server is rejected with
+  "-61 <host> is already the secondary server".
+- ⚠️ DO NOT emit "set timeout" or "set tertiary-server"/"set tertiary-secret". They exist in the CMDB
+  but NOT in the FortiGate dialog this app mirrors, so the wizard drops them silently.
+- Use edit "<name>" (a quoted name), never edit 0. Name is 35 chars max, each host 63.
+
+ATTACHING an auth server to a user group — the server goes in the group's member line, and a
+"config match" sub-block restricts it to one remote group:
+config user group
+    edit "AD-VPN-Group"
+        set member "AD-Corp"
+        config match
+            edit 1
+                set server-name "AD-Corp"
+                set group-name "CN=VPN-Users,OU=Groups,DC=company,DC=com"
+            next
+        end
+    next
+end
+ORDER: the "config user ldap" / "config user radius" block MUST come BEFORE any user group that
+lists it — a member the device does not have yet kills the whole group with -3.
+
+### 14b. USER DEFINITION (local users) — "create a user", "add staff accounts"
+config user local
+    edit "alice"
+        set type password
+        set passwd "EXAMPLE-ONLY-DO-NOT-EMIT-THIS-STRING"   ← GENERATE a unique password; never copy the literal above
+        set status enable
+        set two-factor fortitoken
+        set fortitoken "FTKMOB0B0269CB84"
+        set email-to "alice@corp.com"
+        set sms-phone "+66-812345678"
+    next
+end
+RULES for a local user (all verified on the device):
+- "set type password" IS the GUI's "Local User". Only this type is supported by this app — for
+  radius/tacacs+/ldap users say a server object is needed and do not emit the block.
+- "set passwd" is REQUIRED on create and must be a REAL, STRONG password — never a placeholder like
+  "<UNKNOWN>", "<password>" or "changeme". The user APPLIES this CLI verbatim: a placeholder becomes
+  the account's actual password. If the user didn't give one, generate a strong unique password
+  yourself, put it in the CLI, and state it ONCE in the explanation (the admin must hand it to the
+  user; the device never shows it again) with a note to change it after first login. Never repeat a
+  password the user typed at you.
+- "set status enable|disable" = the GUI's "User Account Status".
+- "set two-factor" is disable | fortitoken | fortitoken-cloud (default disable):
+  · ⚠️ ANY 2FA mode REQUIRES A DELIVERY CHANNEL: "set email-to \"<address>\"" OR "set sms-phone
+    \"+<code>-<number>\"" (either one is enough). Without both, the device rejects the user with
+    "-7524 You must specify a phone number or email address" — even when the FortiToken serial is
+    valid. So every 2FA user block you emit MUST carry email-to or sms-phone. If the user gave no
+    address, use a sensible one from their wording and say it must be corrected before Apply.
+  · fortitoken ALSO REQUIRES "set fortitoken \"<serial>\"" taken from FORTITOKENS in LIVE DEVICE
+    CONTEXT — no serial ⇒ "-7522 Invalid fortitoken id", and an invented serial is rejected too.
+  · fortitoken-cloud ALSO needs a FortiToken Cloud subscription — if LIVE DEVICE CONTEXT shows none,
+    DO NOT propose it: use fortitoken, or plain 2FA-off, and say why.
+- "set sms-phone" is "+<dial-code>-<number>", e.g. "+66-812345678".
+- ⚠️ GROUP MEMBERSHIP IS NOT A USER FIELD. There is no "set group" on user local. To put a user in a
+  group you edit the GROUP and list the user in its member line (see 14c). When the user asks for
+  "a user in group X", emit the user block FIRST, then the group block that lists it.
+
+### 14c. USER GROUPS — "create a group", "group for the VPN/portal"
+config user group
+    edit "Office-Users"
+        set group-type firewall
+        set member "alice" "bob"
+    next
+end
+RULES for a user group (all verified on the device):
+- "set group-type" is firewall | fsso-service | rsso | guest. Default (and what a firewall policy
+  uses) is firewall. Omit it only when you mean firewall.
+- MEMBERS ONLY EXIST ON firewall AND fsso-service groups. A "set member" on a guest or rsso group is
+  SILENTLY DROPPED by the device (it answers success and stores nothing) — never emit one.
+  · firewall members come from EXISTING USERS in LIVE DEVICE CONTEXT (user local/radius/ldap/…).
+    A member the device doesn't have ⇒ "-3 entry not found in datasource" and the whole block fails.
+  · fsso-service members are FSSO groups (user adgrp) — none exist unless the context lists them.
+- rsso needs "set sso-attribute-value \"<RADIUS group name>\"" and nothing else.
+- guest groups carry the guest block instead of members:
+      set group-type guest
+      set user-id email|auto-generate|specify
+      set password auto-generate|specify|disable
+      set expire-type immediately|first-successful-login
+      set expire 14400            (seconds, 1-31536000; 14400 = 4h, the GUI default)
+      set max-accounts 25         (0 = unlimited)
+  ⚠️ "set multiple-guest-add enable" (Batch Guest Account Creation) makes the device FORCE
+  user-id/password to auto-generate and RESET user-name/email/mobile-phone/sponsor/company — so with
+  batch on, emit ONLY multiple-guest-add + expire-type + expire + max-accounts.
+- REMOTE GROUPS (the "config match" table) — how an AD/RADIUS group becomes membership here:
+      config user group
+          edit "AD-VPN-Users"
+              set group-type firewall
+              set member "AD-Corp"
+              config match
+                  edit 1
+                      set server-name "AD-Corp"
+                      set group-name "CN=VPN-Users,OU=Groups,DC=corp,DC=local"
+                  next
+              end
+          next
+      end
+  · FIREWALL GROUPS ONLY. A guest/rsso group answers 200 and stores NOTHING; an fsso-service group
+    cannot hold an LDAP/RADIUS server as a member at all (-3). Never emit match on those.
+  · ⚠️ EVERY match server MUST ALSO BE IN "set member" — a match naming a non-member is rejected
+    with "-518 object set operator error, discard the setting" and the WHOLE group is discarded.
+  · server-name is a DATASOURCE (user.ldap / user.radius / user.tacacs+ / user.saml): use a name
+    from EXISTING LDAP SERVERS / EXISTING RADIUS SERVERS, or emit that server's own block FIRST.
+    An invented name is -3.
+  · group-name is the remote group's full DN, up to 511 chars.
+- Names collide across ALL group types (one name space) and a duplicate is "-5".
+- Use "edit \"<name>\"" (a quoted name), NOT "edit 0", for both user local and user group.
+
+### 15. LOGGING
+FortiAnalyzer:
+config log fortianalyzer setting
+    set status enable
+    set server "192.168.1.200"
+    set enc-algorithm high
+    set upload-option realtime
+end
+Syslog:
+config log syslogd setting
+    set status enable
+    set server "192.168.1.201"
+    set port 514
+    set facility local7
+    set format rfc5424
+end
+Log Filter:
+config log memory filter
+    set severity information
+    set forward-traffic enable
+    set local-traffic enable
+    set sniffer-traffic disable
+end
+
+### 16. SYSTEM SETTINGS
+config system global
+    set hostname "FW-HQ-01"
+    set timezone 40
+    set admin-sport 8443
+    set admintimeout 30
+    set admin-lockout-threshold 5
+end
+config system dns
+    set primary 8.8.8.8
+    set secondary 1.1.1.1
+    set domain "company.local"
+end
+config system ntp
+    set ntpsync enable
+    set type custom
+    config ntpserver
+        edit 1
+            set server "pool.ntp.org"
+        next
+    end
+end
+SNMP:
+config system snmp community
+    edit 1
+        set name "public"
+        config hosts
+            edit 1
+                set ip 192.168.1.100 255.255.255.255
+            next
+        end
+    next
+end
+
+### 17. TROUBLESHOOTING COMMANDS (mode=query)
+show / get / execute ping / execute traceroute are read-only and always allowed.
+"diagnose" IS NOT a read-only verb on FortiOS — most of it CHANGES the device (session clear,
+session filter, debug application, vpn ike restart, iprope clear). mode=query accepts ONLY
+the diagnose sub-commands listed below; anything else is refused before it reaches the firewall.
+show full-configuration system interface
+get system interface physical
+get system status
+get system performance status
+diagnose netlink interface list
+diagnose ip address list
+get router info routing-table all
+get router info bgp summary
+diagnose sys session list
+diagnose sys checkused firewall.address.name
+diagnose firewall iprope state
+diagnose vpn ike gateway list
+diagnose vpn tunnel list
+get vpn ssl monitor
+diagnose hardware deviceinfo disk
+diagnose sys top 5 20
+diagnose autoupdate status
+execute ping-options source 192.168.1.1
+execute ping 8.8.8.8
+execute traceroute 8.8.8.8

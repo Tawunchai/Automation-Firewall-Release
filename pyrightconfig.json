@@ -1,0 +1,7 @@
+{
+  "//": "The Python worker's dependencies (netmiko, redis) are installed inside its Docker image from worker/requirements.txt — they are deliberately NOT installed on the host, so Pylance cannot resolve them and reports false 'could not be resolved' errors. Downgrade those to warnings-off for the worker only; every other Python check stays on. To get full IntelliSense instead, create a local venv: python -m venv .venv && .venv/Scripts/pip install -r worker/requirements.txt, then select that interpreter in VS Code.",
+  "include": ["worker"],
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "typeCheckingMode": "basic"
+}

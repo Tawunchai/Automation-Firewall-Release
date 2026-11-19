@@ -1,0 +1,40 @@
+# gitleaks configuration for this repository.
+#
+# The CI job runs `gitleaks detect --no-git` against a fresh checkout, which is exactly the set of
+# TRACKED files. That framing is deliberate: scanning full history would report the .env that is
+# already in it — a fact this file cannot change and a red build nobody can ever make green —
+# whereas scanning the checked-out tree answers the question that is still actionable, "does the
+# repository contain a secret right now".
+#
+# What it caught on its first run, none of which anybody had noticed by reading:
+#   .env         four live secrets, committed before .gitignore covered it
+#   cookies.txt  a session auth_token JWT
+#   fg.txt       a live FortiGate session cookie for the lab firewall, 10.10.20.90
+#
+# The last two are curl cookie jars, created while verifying a change against the lab firewall and
+# then committed with everything else. That is the failure mode this job exists for: not a careless
+# paste, but a byproduct of doing the work.
+
+title = "Network-Automation"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and documentation, which contain credential-SHAPED strings by design"
+
+paths = [
+  # Go and TypeScript test files. A test for "does this handler reject a bad password" has to
+  # contain something password-shaped, and a mapper test for user/local needs a `passwd` field.
+  # Every hit reviewed on the first run was of that kind.
+  #
+  # This is the one broad exemption here, and it is a real trade-off: a genuine secret pasted into
+  # a test file would not be reported. It is accepted because the alternative — a job that cries
+  # wolf on eleven fixtures every run — is a job people learn to ignore, which protects nothing.
+  # Everything that is not a test stays in scope.
+  '''.*_test\.go$''',
+  '''.*\.test\.tsx?$''',
+
+  # The template. It is committed on purpose and every value in it is empty.
+  '''\.env\.example$''',
+]

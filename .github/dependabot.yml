@@ -1,0 +1,116 @@
+# Dependabot for this repository — the FortiGate automation console.
+#
+# Five ecosystems live here (gomod in backend/, npm in frontend/, pip in worker/, the actions this
+# workflow directory uses, and the three Dockerfiles), and between them a plain weekly run would
+# open something like twenty pull requests a week.
+#
+# That is the problem this file is mostly about. One person maintains this repository, and twenty
+# dependency PRs a week do not get twenty reviews — they get ignored as a class, and the one that
+# mattered is ignored with them. So:
+#
+#   * minor and patch updates are GROUPED, one pull request per ecosystem per week. Those are the
+#     updates that are read as a batch anyway: CI either stays green or it does not.
+#   * major updates are left OUT of the groups on purpose, so each one arrives on its own and gets
+#     read on its own. A major bump here is a behaviour change against a live firewall, not a
+#     version number.
+#   * open-pull-requests-limit caps each ecosystem, so a quiet week of reviewing cannot turn into a
+#     backlog nobody opens.
+#
+# ── If you have just taken this repository over ────────────────────────────────────────────────
+#
+# There are open Dependabot pull requests waiting for you, one per group above. They were left
+# deliberately: they arrived during the handover, and merging dependency bumps to hand over a tree
+# whose last known-good state is somebody else's green CI run is a bad trade. Nothing about them is
+# urgent — the `vuln` job (govulncheck, npm audit, pip-audit) is advisory, not blocking, so none of
+# these is holding a gate red.
+#
+# Two of them need more than a glance at green CI:
+#
+#   * the npm group and jsdom. jsdom is the DOM that all 128 vitest files run against, so a bump
+#     there is a change to the environment of the entire frontend suite, not a dependency of the
+#     app. Run `npm run test` in full and read the count, do not just look for a green tick.
+#   * anything that moves Node, Go or Python. See the toolchain-drift note directly below.
+#
+# Suggested order, cheapest and most reversible first: github-actions, then pip, then gomod, then
+# docker (with the ci.yml pin in the same commit), then npm last.
+#
+# One interaction worth knowing before the first docker PR lands: bumping a base image in
+# backend/Dockerfile, frontend/Dockerfile or worker/Dockerfile will make the `toolchain-drift` job
+# in ci.yml red, because CI would then be testing on a different runtime than the image ships. That
+# is the gate working as designed — the PR just needs the matching pin in ci.yml changed with it.
+version: 2
+updates:
+  # ── Go (backend/go.mod) ────────────────────────────────────────────────────
+  - package-ecosystem: "gomod"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── npm (frontend/package.json) ───────────────────────────────────────────
+  # The noisiest ecosystem of the five by a wide margin, and the one where grouping earns the most.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── pip (worker/requirements.txt) ─────────────────────────────────────────
+  # Two pinned packages, netmiko and redis, and netmiko is what talks to the firewall over SSH.
+  # Small enough that a group is almost beside the point; listed for the limit and the schedule.
+  - package-ecosystem: "pip"
+    directory: "/worker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    groups:
+      pip-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── GitHub Actions (.github/workflows) ────────────────────────────────────
+  # ci.yml pins actions to major tags (@v4, @v5, @v3), so in practice this only reports majors —
+  # which is the point: a major action bump is the kind of change that breaks CI for reasons that
+  # have nothing to do with the code being tested.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
+    groups:
+      actions-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # ── Docker base images ────────────────────────────────────────────────────
+  # The three directories that hold a Dockerfile. See the toolchain-drift note in the header: these
+  # PRs are two-line changes, not one-line ones.
+  #
+  # The images pinned in docker-compose.yml (postgres:16-alpine, redis:7-alpine) are deliberately
+  # not listed. A Postgres major is a data migration with a backup and a restore plan behind it, not
+  # something to accept from a pull request.
+  - package-ecosystem: "docker"
+    directories:
+      - "/backend"
+      - "/frontend"
+      - "/worker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      docker-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

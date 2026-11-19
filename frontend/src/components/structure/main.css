@@ -1,0 +1,148 @@
+.sidebar {
+  box-shadow: rgb(113 122 131 / 11%) 0px 7px 30px 0px;
+}
+
+.nav-item,
+.navbar {
+  z-index: 10000;
+}
+
+@media screen and (max-width: 800px) {
+  .sidebar {
+    z-index: 10000000;
+  }
+}
+
+/* ── Global scrollbar ──────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--accent, #7c3aed);
+  border-radius: 40px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--accent-hover, #6d28d9);
+}
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+/* ── Dark mode: Ant Design token overrides ─────────────────────────── */
+/* Ensure AntD table, modal, form, card all feel native in dark mode */
+.dark .ant-table-wrapper .ant-table {
+  background: transparent !important;
+}
+.dark .ant-table-wrapper .ant-table-thead > tr > th {
+  background: rgba(255,255,255,0.04) !important;
+  border-color: rgba(255,255,255,0.06) !important;
+  color: rgba(255,255,255,0.65) !important;
+}
+.dark .ant-table-wrapper .ant-table-tbody > tr > td {
+  border-color: rgba(255,255,255,0.05) !important;
+}
+.dark .ant-table-wrapper .ant-table-tbody > tr:hover > td {
+  background: rgba(255,255,255,0.04) !important;
+}
+.dark .ant-modal-content {
+  background: #1a1d2e !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+}
+.dark .ant-modal-header {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+}
+.dark .ant-modal-title {
+  color: rgba(255,255,255,0.88) !important;
+}
+.dark .ant-drawer-content {
+  background: #1a1d2e !important;
+}
+.dark .ant-drawer-header {
+  background: transparent !important;
+  border-bottom: 1px solid rgba(255,255,255,0.08) !important;
+}
+.dark .ant-form-item-label > label {
+  color: rgba(255,255,255,0.65) !important;
+}
+.dark .ant-input,
+.dark .ant-input-affix-wrapper,
+.dark .ant-input-number,
+.dark .ant-select:not(.ant-select-customize-input) .ant-select-selector {
+  background: rgba(255,255,255,0.05) !important;
+  border-color: rgba(255,255,255,0.1) !important;
+  color: rgba(255,255,255,0.85) !important;
+}
+.dark .ant-input::placeholder,
+.dark .ant-input-affix-wrapper input::placeholder {
+  color: rgba(255,255,255,0.28) !important;
+}
+.dark .ant-select-dropdown {
+  background: #1e2130 !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+}
+.dark .ant-select-item {
+  color: rgba(255,255,255,0.65) !important;
+}
+.dark .ant-select-item-option-active {
+  background: rgba(255,255,255,0.06) !important;
+}
+.dark .ant-select-item-option-selected {
+  background: rgba(var(--accent-rgb, 26,151,245), 0.15) !important;
+}
+.dark .ant-tabs-tab {
+  color: rgba(255,255,255,0.45) !important;
+}
+.dark .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--accent, #1A97F5) !important;
+}
+.dark .ant-tabs-ink-bar {
+  background: var(--accent, #1A97F5) !important;
+}
+.dark .ant-tabs-nav::before {
+  border-color: rgba(255,255,255,0.08) !important;
+}
+.dark .ant-card {
+  background: rgba(255,255,255,0.03) !important;
+  border-color: rgba(255,255,255,0.08) !important;
+}
+.dark .ant-statistic-title {
+  color: rgba(255,255,255,0.45) !important;
+}
+.dark .ant-statistic-content {
+  color: rgba(255,255,255,0.88) !important;
+}
+.dark .ant-popover-inner {
+  background: #1e2130 !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+}
+.dark .ant-tooltip-inner {
+  background: #2a2d3e !important;
+}
+.dark .ant-switch {
+  background: rgba(255,255,255,0.15) !important;
+}
+.dark .ant-switch-checked {
+  background: var(--accent, #1A97F5) !important;
+}
+
+/* ── Smooth transition for dark mode switch ───────────────────────── */
+*,
+*::before,
+*::after {
+  transition-property: background-color, border-color, color;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}
+
+/* Exclude transitions for elements that should NOT animate */
+.ant-spin-dot,
+.ant-progress-circle,
+[class*="animate-"],
+img,
+svg,
+video,
+canvas {
+  transition: none !important;
+}

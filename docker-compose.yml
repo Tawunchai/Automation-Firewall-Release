@@ -1,0 +1,294 @@
+# =====================================================================
+#  Project — Docker Compose
+#  Stack: PostgreSQL + Go Backend (Gin) + React Frontend (nginx)
+#
+#  วิธีใช้:
+#    1) ./scripts/bootstrap.sh          (Windows: powershell -File scripts\bootstrap.ps1)
+#       -- generate ค่าลับ 5 ตัวลง .env  ห้าม `cp .env.example .env` มันบูตไม่ขึ้น
+#    2) docker compose up -d --build
+#    3) เปิด  Frontend: http://localhost:5173   |   Backend: http://localhost:9000
+#
+#  บัญชี seed: admin@got.co.th เท่านั้น (เลิก seed user@got.co.th ตั้งแต่ 2026-11-18)
+#  รหัสมาจาก SEED_ADMIN_PASSWORD ตอน seed ครั้งแรก -- ไม่ตั้ง = ค่า default ใน
+#  backend/config/db.go ซึ่ง public  ดู README.md และ HANDOVER.md
+# =====================================================================
+
+# Pinned explicitly: Compose otherwise derives the project name from the directory this file sits
+# in. This file used to live in a folder named `Project`, so the running stack's volumes and network
+# are prefixed `project_*` / `project-*`. Pinning the name here means moving this file to a
+# differently-named directory (e.g. flattening `Project/` into the repo root) does NOT orphan the
+# existing `project_pgdata` / `project_uploads` / `project_redisdata` / `project_config-backups`
+# volumes or the `project_appnet` network — `docker compose up` keeps reattaching to the same ones.
+name: project
+
+services:
+  # -------------------------------------------------------------------
+  # PostgreSQL
+  # -------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: project-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_DB: "${POSTGRES_DB:-starter_web}"
+      TZ: "Asia/Bangkok"
+    # ⚠️ 5432 is NOT published. The database holds every device's encrypted admin credential, so
+    # exposing it on the host put that one weak password between an attacker and the firewalls.
+    # backend/worker reach it over the internal `appnet` network by service name.
+    # For pgAdmin / a local `go run`, start a one-off tunnel instead of reopening it here:
+    #   docker compose exec postgres psql -U postgres -d starter_web
+    #   docker run --rm --network project_appnet -p 5432:5432 alpine/socat tcp-listen:5432,fork tcp:postgres:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [appnet]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-starter_web}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # -------------------------------------------------------------------
+  # Backend — Go (Gin + GORM)
+  # -------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: project-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: "9000"
+      GIN_MODE: "release"
+      # --- Network Automation: queue + credential encryption + worker auth ---
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0"
+      # ── Secrets: NO defaults on purpose ────────────────────────────────────
+      # These used to fall back to fixed strings, which meant every install shared one publicly
+      # known key. `:?` makes compose refuse to start until each is set in .env, and the backend
+      # re-checks them at boot (services.ValidateCredKeyConfig / ValidateWorkerSecret).
+      #   openssl rand -hex 32
+      #
+      # Only the version named by CRED_ENC_KEY_VERSION encrypts new secrets. The OLDER versions
+      # stay here for one reason: they are the only thing that can still DECRYPT rows written
+      # before the rotation, so each one is removed only after /admin/rotate-cred-key reports every
+      # table at the new version.
+      #
+      # Every version in play must be listed. A key that exists in .env but is not passed through
+      # here is simply absent inside the container, and rotation fails on every row it protects —
+      # so add the next line as CRED_ENC_KEY_V4 before rotating to it, not after.
+      CRED_ENC_KEY: "${CRED_ENC_KEY:-}"
+      CRED_ENC_KEY_V3: "${CRED_ENC_KEY_V3:-}"
+      CRED_ENC_KEY_VERSION: "${CRED_ENC_KEY_VERSION:-1}"
+      WORKER_SHARED_SECRET: "${WORKER_SHARED_SECRET:?set WORKER_SHARED_SECRET in .env}"
+      # เชื่อม DB ผ่านชื่อ service "postgres" ภายใน network
+      DATABASE_URL: "host=postgres port=5432 user=${POSTGRES_USER:-postgres} password=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env} dbname=${POSTGRES_DB:-starter_web} sslmode=disable"
+      JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env}"
+      BACKEND_URL: "${BACKEND_URL:-http://localhost:9000}"
+      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:5173}"
+      # origin ของ frontend (ต้องตรงกับที่ publish ออกไป)
+      CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-http://localhost:5173}"
+      # OAuth (ไม่บังคับ — เว้นว่างได้)
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+      GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID:-}"
+      GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET:-}"
+      LINE_CLIENT_ID: "${LINE_CLIENT_ID:-}"
+      LINE_CLIENT_SECRET: "${LINE_CLIENT_SECRET:-}"
+      # AI Assistant (Claude API) — เว้นว่าง = ปิดฟีเจอร์
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      ANTHROPIC_MODEL: "${ANTHROPIC_MODEL:-}"
+      AUDIT_CATALOGUE_STATUS: "${AUDIT_CATALOGUE_STATUS:-}"
+      # Trace Route hop geolocation (offline MaxMind GeoLite2). The .mmdb files are mounted read-only
+      # from ./backend/geoip (git-ignored). When they are absent the feature simply disables itself —
+      # hop detail still shows rDNS + address-kind + internal-role. See scripts/download-geoip.sh.
+      GEOIP_CITY_DB: "${GEOIP_CITY_DB:-/geoip/GeoLite2-City.mmdb}"
+      GEOIP_ASN_DB: "${GEOIP_ASN_DB:-/geoip/GeoLite2-ASN.mmdb}"
+      # ── ใครที่ backend ยอมเชื่อ X-Forwarded-For ─────────────────────────────
+      # ค่า default = IP ของ nginx (frontend) ตัวเดียวเท่านั้น — แคบที่สุดเท่าที่ยังใช้งานได้
+      #
+      # ทำไมต้องตั้ง: gin เชื่อ proxy ทุกตัวโดย default แปลว่า X-Forwarded-For คือค่าที่ client
+      # ส่งมาเองได้ → หมุน header ไปเรื่อยๆ ก็ข้าม LoginLimiter (กัน brute-force) และ AILimiter
+      # (กันค่า Anthropic API บานปลาย) ได้ทั้งคู่ และ IP ที่โชว์ในหน้า Sessions ก็ปลอมได้
+      #
+      # ทำไมต้องตั้ง (อีกด้าน): ถ้าไม่เชื่อใครเลย ทุกคนที่เข้าผ่าน nginx จะกลายเป็น IP เดียวกัน
+      # → คนหนึ่งกดจนเต็มโควตา คนอื่นโดนบล็อกไปด้วย
+      #
+      # ⚠️ ระบุเป็น /32 ของ nginx ไม่ใช่ทั้ง subnet เพราะ 9000 ถูก publish ออก host ด้วย —
+      # ถ้าเชื่อทั้ง appnet ทุกอย่างที่ยิงผ่าน host:9000 (มาจาก gateway ของ bridge) จะถูกเชื่อไปด้วย
+      TRUSTED_PROXIES: "${TRUSTED_PROXIES:-${FRONTEND_IP:-172.31.240.10}/32}"
+    ports:
+      - "9000:9000"
+    volumes:
+      # GeoLite2 databases for Trace Route hop geolocation. Read-only; the directory is kept in git
+      # by its README.md, while the .mmdb files are ignored — fetch them with scripts/download-geoip.sh.
+      - ./backend/geoip:/geoip:ro
+    networks: [appnet]
+    # /readyz, not /healthz and not "/" — the container is only useful once it can reach Postgres
+    # and Redis, and `GET /` answers 200 while both are down. busybox wget is already in the alpine
+    # runtime image, so this needs nothing installed.
+    #
+    # start_period covers AutoMigrate and the seed, which run before the port opens: without it the
+    # first few probes fail on a perfectly healthy boot and compose counts them as retries.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9000/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # -------------------------------------------------------------------
+  # Redis — คิวงาน automation (Go push → worker BRPOP)
+  # -------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: project-redis
+    restart: unless-stopped
+    # --appendonly yes is why the job queue's contents matter: everything LPUSHed here is written
+    # to an append-only file that nothing rewrites. That is the reason the backup and config-push
+    # messages no longer carry the device password — they carry a single-use token the worker
+    # exchanges for it (backend/services/jobcredential.go). Nothing secret reaches this file now.
+    #
+    # Redis is reachable only on this compose network and 6379 is not published — but it now takes
+    # a password as well, because "only on the network" stops being true the moment anything else
+    # runs on this host: any container that can resolve `redis` could otherwise read the queue,
+    # and the queue is how jobs reach the firewalls.
+    #
+    # FOUR things carry the password, and they move together or the stack does not come up:
+    #   1. REDIS_PASSWORD in .env (openssl rand -hex 32 — hex so it needs no URL-escaping)
+    #   2. --requirepass here
+    #   3. BOTH REDIS_URL values above (backend and worker), as redis://:<pw>@redis:6379/0
+    #   4. THE HEALTHCHECK BELOW. This is the one the old note here forgot: with requirepass set,
+    #      an unauthenticated `redis-cli ping` answers NOAUTH, so the container never turns
+    #      healthy, and backend and worker both wait on `condition: service_healthy` forever. The
+    #      symptom is a stack that hangs at startup with a perfectly good Redis inside it.
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}"
+    command: ["sh", "-c", "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\""]
+    volumes:
+      - redisdata:/data
+    networks: [appnet]
+    healthcheck:
+      # CMD-SHELL so $REDIS_PASSWORD is expanded inside the container; --no-auth-warning keeps the
+      # password off stderr on every probe.
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # -------------------------------------------------------------------
+  # Worker — Python (netmiko) ทำ backup/automation อุปกรณ์เครือข่าย
+  # -------------------------------------------------------------------
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: project-worker
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        # service_healthy, not service_started: the worker's first act on finishing a job is to POST
+        # the result to /internal/..., so starting it against a backend that is still migrating
+        # means the first job of a boot reports into a closed door.
+        condition: service_healthy
+    environment:
+      REDIS_URL: "redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379/0"
+      # worker เรียก backend ผ่านชื่อ service ภายใน network
+      BACKEND_URL: "http://backend:9000"
+      # Must be the SAME value the backend has, or every /internal/* callback is rejected.
+      WORKER_SHARED_SECRET: "${WORKER_SHARED_SECRET:?set WORKER_SHARED_SECRET in .env}"
+    volumes:
+      # เก็บ Git repo ของ config backup ให้คงอยู่ข้าม restart
+      - config-backups:/app/config-backups
+    networks: [appnet]
+    # Time for a job already in flight to finish and POST its result before SIGKILL.
+    #
+    # This is the whole point of the worker's SIGTERM handling: it stops accepting work immediately
+    # but lets the current backup complete, so a redeploy does not manufacture a FAILED job out of
+    # a backup that was going fine. Stated explicitly because it must not be inherited — measured on
+    # this host, the default killed the container 3.4s after the signal, which is less than one SSH
+    # round trip to a firewall.
+    #
+    # 45s covers a backup of the lab FGT80E with room to spare. A job slower than that is killed as
+    # it always was; nothing here can make an arbitrarily long SSH session interruptible.
+    stop_grace_period: 45s
+    # The worker has no port to probe, so its health IS its heartbeat: a daemon thread writes
+    # worker:heartbeat to Redis every ~30s with a 60s TTL, and the Devices page reads exactly that
+    # key to decide whether the worker is online (controller/automationjob.WorkerHealth).
+    #
+    # Probing the same key catches the failure that "the process is running" misses — a worker whose
+    # main loop is wedged on a dead SSH session still has a PID, and without this it stays in the
+    # cluster as a healthy container that quietly does no work.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,redis; sys.exit(0 if redis.Redis.from_url(os.environ['REDIS_URL']).get('worker:heartbeat') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -------------------------------------------------------------------
+  # Frontend — React (build) + nginx (serve)
+  # -------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # "/api" = same-origin ผ่าน nginx reverse proxy (ดู frontend/nginx/common.conf)
+        # เปิดจาก localhost:5173 หรือ <vm-ip>:5173 ก็เรียก backend ได้เร็วเท่ากัน
+        VITE_BACKEND_URL: "${VITE_BACKEND_URL:-/api}"
+    container_name: project-frontend
+    restart: unless-stopped
+    depends_on:
+      # Same reason as the worker: nginx proxies /api straight through, so a frontend served before
+      # the backend is ready greets the first visitor with a login screen that cannot log in.
+      backend:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+      # HTTPS — ว่างไว้ก็ไม่เป็นไรถ้ายังไม่มี cert (entrypoint จะ serve HTTP อย่างเดียว)
+      # ต้องเปิดพอร์ตนี้ถ้าจะใช้ "กดไมค์พูด" ในหน้า AI Assistant จากเครื่องอื่นในวง LAN:
+      # เบราว์เซอร์ปล่อยให้ใช้ไมโครโฟนเฉพาะ secure context ซึ่ง http://<ip> ไม่นับ
+      - "5443:443"
+    environment:
+      # พอร์ตที่ HTTPS ถูก publish ออกมาฝั่ง host — nginx ในคอนเทนเนอร์เห็นแค่ 443
+      # เลยเดาเองไม่ได้ ถ้าไม่บอก redirect จาก HTTP จะพาไปพอร์ต 443 ที่ไม่มีใครฟัง
+      PUBLIC_HTTPS_PORT: "${PUBLIC_HTTPS_PORT:-5443}"
+    volumes:
+      # cert สร้างด้วย scripts/gen-lan-cert.sh — โฟลเดอร์ว่าง = โหมด HTTP เหมือนเดิม
+      # read-only เพราะ nginx แค่อ่าน ไม่ต้องเขียน
+      - ./frontend/certs:/etc/nginx/certs:ro
+    networks:
+      appnet:
+        # IP คงที่ เพราะ backend เชื่อ X-Forwarded-For จาก IP นี้ตัวเดียว (ดู TRUSTED_PROXIES ข้างบน)
+        # ถ้าปล่อยให้ docker แจก IP เอง ค่ามันเปลี่ยนทุกครั้งที่ recreate → rate limit เพี้ยน
+        ipv4_address: "${FRONTEND_IP:-172.31.240.10}"
+
+# =====================================================================
+volumes:
+  pgdata:
+  redisdata:
+  config-backups:
+
+networks:
+  appnet:
+    driver: bridge
+    # subnet ถูกกำหนดตายตัวเพราะ frontend ต้องมี IP คงที่ (ดู TRUSTED_PROXIES ที่ service backend)
+    #
+    # เลือก 172.31.240.0/24 เพราะเลี่ยงของที่มักมีอยู่แล้วบนเครื่อง dev:
+    #   172.17.0.0/16   docker bridge เริ่มต้น
+    #   172.29.32.0/20  vEthernet ของ WSL2 / Hyper-V (เจอบนเครื่องที่พัฒนาโปรเจกต์นี้)
+    #   10.0.99.0/24    วง LAN ของ FortiGate ในแล็บ — ถ้าทับ backend จะเรียกอุปกรณ์ไม่ได้เลย
+    # ใช้ /24 ไม่ใช่ /16 เพราะมีแค่ 5 container จะกินพื้นที่ทั้ง /16 ไปทำไม
+    #
+    # ถ้ายังชนกับ network อื่นบนเครื่อง ให้ตั้ง APPNET_SUBNET + FRONTEND_IP ใน .env ให้อยู่ช่วงเดียวกัน
+    ipam:
+      config:
+        - subnet: "${APPNET_SUBNET:-172.31.240.0/24}"
